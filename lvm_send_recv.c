@@ -72,23 +72,26 @@ static void expect_end_tag(int tag)
 	expect('<');
 	expect('/');
 	expect(tag);
+	expect('>');
 }
 
-static char *expect_attribute(int attribute)
+static const char *expect_attribute(int attribute)
 {
 	expect(attribute);
 	expect('=');
 	expect(TK_STRING);
-	return NULL; /* */
+	return str_value;
 }
 
 static void parse()
 {
+	long data_block_size;
+
 	expect_tag(TK_SUPERBLOCK);
 	expect_attribute(TK_UUID);
 	expect_attribute(TK_TIME);
 	expect_attribute(TK_TRANSACTION);
-	expect_attribute(TK_DATA_BLOCK_SIZE);
+	data_block_size = atol(expect_attribute(TK_DATA_BLOCK_SIZE));
 	expect_attribute(TK_NR_DATA_BLOCKS);
 	expect('>');
 
@@ -98,6 +101,7 @@ static void parse()
 	expect('>');
 
 	while (true) {
+		long long begin, length;
 		int token;
 
 		expect('<');
@@ -107,13 +111,16 @@ static void parse()
 		case TK_SAME:
 		case TK_RIGHT_ONLY:
 		case TK_LEFT_ONLY:
-			expect_attribute(TK_BEGIN);
-			expect_attribute(TK_LENGTH);
+			begin = atoll(expect_attribute(TK_BEGIN));
+			length = atoll(expect_attribute(TK_LENGTH));
 			expect('/');
 			expect('>');
 			break;
 		case '/':
 			goto break_loop;
+		}
+		if (token == TK_DIFFERENT || token == TK_RIGHT_ONLY) {
+			printf("%lld %lld\n", begin, length);
 		}
 	}
 break_loop:

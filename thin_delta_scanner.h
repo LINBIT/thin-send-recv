@@ -23,4 +23,6 @@ enum token {
 extern FILE* yyin;
 extern int yylex(void);
 
+extern char *str_value;
+
 #endif

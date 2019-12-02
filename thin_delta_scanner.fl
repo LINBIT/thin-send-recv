@@ -5,25 +5,31 @@
 //#define DP printf("%s", yytext);
 #define DP
 
+char *str_value;
+
 %}
 
 %option noyywrap
 %option yylineno
 %option nounput
 
-%x string
-
 WS              [ \t\r\n]
 OP		[<>=/]
-STR		[^\"\r\n]{0,20}
+STR		\"[^\"\r\n]{0,20}\"
 
 %%
 
-\"		BEGIN(string); DP;
-<string>{STR}\"	BEGIN(INITIAL); DP; return TK_STRING;
-
 {WS}		/* skip silently */ DP;
 {OP}		DP; return yytext[0];
+{STR}		DP; {
+			if (yyleng > 2) {
+				yytext[yyleng-1] = 0;
+				str_value = yytext + 1;
+			} else {
+				str_value = NULL;
+			}
+			return TK_STRING;
+		    }
 diff		DP; return TK_DIFF;
 left		DP; return TK_LEFT;
 uuid		DP; return TK_UUID;

@@ -1,0 +1,41 @@
+%{
+#include <stdio.h>
+#include "thin_delta_scanner.h"
+
+//#define DP printf("%s", yytext);
+#define DP
+
+%}
+
+%option noyywrap
+%option yylineno
+%option nounput
+
+%x string
+
+WS              [ \t\r\n]
+OP		[<>=/]
+STR		[^\"\r\n]{0,20}
+
+%%
+
+\"		BEGIN(string); DP;
+<string>{STR}\"	BEGIN(INITIAL); DP; return TK_STRING;
+
+{WS}		/* skip silently */ DP;
+{OP}		DP; return yytext[0];
+diff		DP; return TK_DIFF;
+left		DP; return TK_LEFT;
+uuid		DP; return TK_UUID;
+time		DP; return TK_TIME;
+same 		DP; return TK_SAME;
+right		DP; return TK_RIGHT;
+begin		DP; return TK_BEGIN;
+length		DP; return TK_LENGTH;
+different 	DP; return TK_DIFFERENT;
+left_only	DP; return TK_LEFT_ONLY;
+right_only 	DP; return TK_RIGHT_ONLY;
+superblock      DP; return TK_SUPERBLOCK;
+transaction	DP; return TK_TRANSACTION;
+nr_data_blocks  DP; return TK_NR_DATA_BLOCKS;
+data_block_size DP; return TK_DATA_BLOCK_SIZE;

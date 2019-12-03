@@ -28,7 +28,7 @@ STR		\"[^\"\r\n]{0,20}\"
 			} else {
 				str_value = NULL;
 			}
-			return TK_STRING;
+			return TK_VALUE;
 		    }
 diff		DP; return TK_DIFF;
 left		DP; return TK_LEFT;

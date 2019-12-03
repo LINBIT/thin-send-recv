@@ -79,7 +79,7 @@ static const char *expect_attribute(int attribute)
 {
 	expect(attribute);
 	expect('=');
-	expect(TK_STRING);
+	expect(TK_VALUE);
 	return str_value;
 }
 

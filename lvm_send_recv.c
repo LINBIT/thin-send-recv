@@ -1,11 +1,24 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <unistd.h>
 #include <getopt.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include "thin_delta_scanner.h"
 
+struct snap_info {
+	char *vg_name;
+	char *lv_name;
+	char *thin_pool_name;
+	int thin_id;
+};
+
 static void parse();
+static void usage_exit(const char *prog_name, const char *reason);
+static void get_snap_info(const char *snap_name, struct snap_info *info);
+static int checked_asprintf(char **strp, const char *fmt, ...);
+static void checked_system(const char *fmt, ...);
 
 int main(int argc, char **argv)
 {
@@ -14,33 +27,89 @@ int main(int argc, char **argv)
 		{0,           0,           0, 0 }
 	};
 
-	int option_index;
-	int c;
+	struct snap_info snap1, snap2;
+	char tmp_file_name[] = "lvm_send_recv_XXXXXXXX";
+	int option_index, c, tmp_fd;
 
 	do {
 		c = getopt_long(argc, argv, "v", long_options, &option_index);
 		switch (c) {
 		case 'v':
-			fprintf(stdout, "%s [--version] snapshot1 snapshot2\n", argv[0]);
-			break;
+			puts("0.11\n");
+			exit(0);
 		case '?': /* unknown opt*/
 		default: ;
 		}
 	} while (c != -1);
 
-	if (optind != argc - 1 /* 2 */) {
-		fprintf(stderr, "two positional arguments expected\n");
+	if (optind != argc - 2) {
+		usage_exit(argv[0], "two positional arguments expected\n");
 		exit(10);
 	}
 
-	yyin = fopen(argv[optind], "r");
-	if (!yyin) {
-		fprintf(stderr, "failed to open file\n");
+	get_snap_info(argv[optind], &snap1);
+	get_snap_info(argv[optind + 1], &snap2);
+
+	tmp_fd = mkstemp(tmp_file_name);
+	if (tmp_fd == -1) {
+		perror("failed creating tmp file");
 		exit(10);
 	}
+
+	checked_system("dmsetup message /dev/mapper/%s--%s-tpool 0 reserve_metadata_snap",
+		       snap1.vg_name, snap1.thin_pool_name);
+
+	checked_system("thin_delta  -m --snap1 %d --snap2 %d /dev/mapper/%s--%s_tmeta > %s",
+		       snap1.thin_id, snap2.thin_id, snap2.vg_name, snap2.thin_pool_name, tmp_file_name);
+	unlink(tmp_file_name);
+
+	checked_system("dmsetup message /dev/mapper/%s--%s-tpool 0 release_metadata_snap",
+		       snap1.vg_name, snap1.thin_pool_name);
+
+	yyin = fdopen(tmp_fd, "r");
+	if (!yyin) {
+		perror("failed to open file");
+		exit(10);
+	}
+
+	yyin = fopen(argv[optind], tmp_file_name);
 
 	parse();
 	fclose(yyin);
+}
+
+static void get_snap_info(const char *snap_name, struct snap_info *info)
+{
+	char *cmdline;
+	int matches;
+	FILE *f;
+
+	checked_asprintf(&cmdline, "lvs --noheadings -o vg_name,lv_name,pool_lv,thin_id %s", snap_name);
+	f = popen(cmdline, "r");
+	if (!f) {
+		perror("popen failed");
+		exit(10);
+	}
+
+	matches = fscanf(f, " %ms %ms %ms %d",
+			 &info->vg_name,
+			 &info->lv_name,
+			 &info->thin_pool_name,
+			 &info->thin_id);
+	if (matches != 4) {
+		fprintf(stderr, "failed to parse lvs output cmdline=%s\n", cmdline);
+		exit(10);
+	}
+	fclose(f);
+}
+
+static void usage_exit(const char *prog_name, const char *reason)
+{
+	if (reason)
+		fputs(reason, stderr);
+
+	fprintf(stderr, "%s [--version] snapshot1 snapshot2\n", prog_name);
+	exit(10);
 }
 
 
@@ -128,4 +197,44 @@ break_loop:
 	expect('>');
 
 	expect_end_tag(TK_SUPERBLOCK);
+}
+
+static int checked_asprintf(char **strp, const char *fmt, ...)
+{
+        va_list ap;
+        int chars;
+
+        va_start(ap, fmt);
+        chars = vasprintf(strp, fmt, ap);
+        va_end(ap);
+
+        if (chars == -1) {
+                fprintf(stderr, "vasprintf() failed. Out of memory?\n");
+                exit(10);
+        }
+
+        return chars;
+}
+
+static void checked_system(const char *fmt, ...)
+{
+	va_list ap;
+	char *cmdline;
+        int chars;
+	int ret;
+
+        va_start(ap, fmt);
+        chars = vasprintf(&cmdline, fmt, ap);
+        va_end(ap);
+
+        if (chars == -1) {
+                fprintf(stderr, "vasprintf() failed. Out of memory?\n");
+                exit(10);
+        }
+
+	ret = system(cmdline);
+	if (!(WIFEXITED(ret) && WEXITSTATUS(ret) == 0)) {
+		fprintf(stderr, "cmd %s exited with %d\n", cmdline, WEXITSTATUS(ret));
+		exit(10);
+	}
 }

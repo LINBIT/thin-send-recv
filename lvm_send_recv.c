@@ -26,14 +26,20 @@ struct chunk {
 	uint32_t cmd;
 } __attribute__((packed));
 
+enum cmd {
+	CMD_DATA,
+	CMD_UNMAP,
+};
+
+static const uint64_t MAGIC_VALUE = 0xe85bc5636cc72a05;
+
 static void parse_and_process(int in_fd, int out_fd);
 static void usage_exit(const char *prog_name, const char *reason);
 static void get_snap_info(const char *snap_name, struct snap_info *info);
 static int checked_asprintf(char **strp, const char *fmt, ...);
 static void checked_system(const char *fmt, ...);
+static void send_header(int out_fd, off64_t begin, size_t length, enum cmd cmd);
 static void send_chunk(int in_fd, int out_fd, off64_t begin, size_t length);
-
-static const uint64_t MAGIC_VALUE = 0xe85bc5636cc72a05;
 
 int main(int argc, char **argv)
 {
@@ -217,8 +223,13 @@ static void parse_and_process(int in_fd, int out_fd)
 			send_chunk(in_fd, out_fd,
 				   begin * block_size * 512,
 				   length * block_size * 512);
+		} else if (token == TK_LEFT_ONLY) {
+			send_header(out_fd,
+				    begin * block_size * 512,
+				    length * block_size * 512,
+				    CMD_UNMAP);
 		}
-		/* handle a "left only" case by sending info to create a hole */
+
 	}
 break_loop:
 	expect(TK_DIFF);
@@ -227,14 +238,14 @@ break_loop:
 	expect_end_tag(TK_SUPERBLOCK);
 }
 
-static void send_chunk(int in_fd, int out_fd, off64_t begin, size_t length)
+static void send_header(int out_fd, off64_t begin, size_t length, enum cmd cmd)
 {
 	int ret;
 	struct chunk chunk = {
 		.magic = MAGIC_VALUE,
 		.offset = htobe64(begin),
 		.length = htobe32(length),
-		.cmd = htobe32(0),
+		.cmd = htobe32(cmd),
 	};
 
 	ret = write(out_fd, &chunk, sizeof(chunk));
@@ -245,6 +256,13 @@ static void send_chunk(int in_fd, int out_fd, off64_t begin, size_t length)
 		fprintf(stderr, "write returned %d instead of %ld\n", ret, sizeof(chunk));
 		exit(10);
 	}
+}
+
+static void send_chunk(int in_fd, int out_fd, off64_t begin, size_t length)
+{
+	int ret;
+
+	send_header(out_fd, begin, length, CMD_DATA);
 
 	ret = sendfile64(out_fd, in_fd, &begin, length);
 	if (ret == -1) {

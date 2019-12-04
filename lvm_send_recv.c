@@ -17,6 +17,7 @@ struct snap_info {
 	char *vg_name;
 	char *lv_name;
 	char *thin_pool_name;
+	char *dm_path;
 	int thin_id;
 };
 
@@ -48,14 +49,14 @@ static bool process_input(int in_fd, int out_fd);
 int main(int argc, char **argv)
 {
 	static struct option long_options[] = {
-		{"--version", no_argument, 0, 0 },
-		{"--send", no_argument, 0, 0 },
-		{"--receive", no_argument, 0, 0 },
-		{0,           0,           0, 0 }
+		{"version", no_argument, 0, 'v' },
+		{"send",    no_argument, 0, 's' },
+		{"receive", no_argument, 0, 'r' },
+		{0,         0,           0, 0 }
 	};
 
 	struct snap_info snap1, snap2;
-	char tmp_file_name[] = "lvm_send_recv_XXXXXXXX";
+	char tmp_file_name[] = "lvm_send_recv_XXXXXX";
 	int option_index, c, tmp_fd, snap2_fd;
 	bool send_mode = false, receive_mode = false;
 	char *snap2_file_name;
@@ -71,6 +72,8 @@ int main(int argc, char **argv)
 			break;
 		case 'r':
 			receive_mode = true;
+			break;
+		case -1:
 			break;
 			/* case '?': unknown opt*/
 		default:
@@ -100,12 +103,35 @@ int main(int argc, char **argv)
 	}
 }
 
+static char *get_thin_pool_dm_path(const struct snap_info *snap)
+{
+	char *thin_pool_dm_path, *cmdline;
+	int matches;
+	FILE *f;
+
+	checked_asprintf(&cmdline, "lvs --noheadings -o lv_dm_path %s/%s", snap->vg_name, snap->thin_pool_name);
+	f = popen(cmdline, "r");
+	if (!f) {
+		perror("popen failed");
+		exit(10);
+	}
+
+	matches = fscanf(f, " %ms", &thin_pool_dm_path);
+	if (matches != 1) {
+		fprintf(stderr, "failed to parse lvs output %d cmdline=%s\n", matches, cmdline);
+		exit(10);
+	}
+	fclose(f);
+
+	return thin_pool_dm_path;
+}
+
 static void thin_send(const char *snap1_name, const char *snap2_name, int out_fd)
 {
 	struct snap_info snap1, snap2;
-	char tmp_file_name[] = "lvm_send_recv_XXXXXXXX";
+	char tmp_file_name[] = "/tmp/lvm_send_recv_XXXXXXXX";
+	char *thin_pool_dm_path;
 	int tmp_fd, snap2_fd;
-	char *snap2_file_name;
 
 	get_snap_info(snap1_name, &snap1);
 	get_snap_info(snap2_name, &snap2);
@@ -115,16 +141,19 @@ static void thin_send(const char *snap1_name, const char *snap2_name, int out_fd
 		perror("failed creating tmp file");
 		exit(10);
 	}
+	fcntl(tmp_fd, F_SETFD, FD_CLOEXEC);
 
-	checked_system("dmsetup message /dev/mapper/%s--%s-tpool 0 reserve_metadata_snap",
-		       snap1.vg_name, snap1.thin_pool_name);
+	thin_pool_dm_path = get_thin_pool_dm_path(&snap2);
+	checked_system("dmsetup message %s-tpool 0 reserve_metadata_snap",
+		       thin_pool_dm_path);
 
-	checked_system("thin_delta  -m --snap1 %d --snap2 %d /dev/mapper/%s--%s_tmeta > %s",
-		       snap1.thin_id, snap2.thin_id, snap2.vg_name, snap2.thin_pool_name, tmp_file_name);
+	checked_system("thin_delta -m --snap1 %d --snap2 %d %s_tmeta > %s",
+		       snap1.thin_id, snap2.thin_id, thin_pool_dm_path,
+		       tmp_file_name);
 	unlink(tmp_file_name);
 
-	checked_system("dmsetup message /dev/mapper/%s--%s-tpool 0 release_metadata_snap",
-		       snap1.vg_name, snap1.thin_pool_name);
+	checked_system("dmsetup message %s-tpool 0 release_metadata_snap",
+		       thin_pool_dm_path);
 
 	yyin = fdopen(tmp_fd, "r");
 	if (!yyin) {
@@ -132,8 +161,7 @@ static void thin_send(const char *snap1_name, const char *snap2_name, int out_fd
 		exit(10);
 	}
 
-	checked_asprintf(&snap2_file_name, "/dev/%s/%s", snap2.vg_name, snap2.lv_name);
-	snap2_fd = open(snap2_file_name, O_RDONLY | O_DIRECT);
+	snap2_fd = open(snap2.dm_path, O_RDONLY | O_DIRECT | FD_CLOEXEC);
 	if (!snap2_fd < 0) {
 		perror("failed to open snap2");
 		exit(10);
@@ -155,7 +183,7 @@ static void thin_receive(const char *snap_name, int in_fd)
 	get_snap_info(snap_name, &snap);
 
 	checked_asprintf(&snap_file_name, "/dev/%s/%s", snap.vg_name, snap.lv_name);
-	out_fd = open(snap_file_name, O_WRONLY | O_DIRECT);
+	out_fd = open(snap_file_name, O_WRONLY | O_DIRECT | FD_CLOEXEC);
 	if (!out_fd < 0) {
 		perror("failed to open snap");
 		exit(10);
@@ -174,20 +202,21 @@ static void get_snap_info(const char *snap_name, struct snap_info *info)
 	int matches;
 	FILE *f;
 
-	checked_asprintf(&cmdline, "lvs --noheadings -o vg_name,lv_name,pool_lv,thin_id %s", snap_name);
+	checked_asprintf(&cmdline, "lvs --noheadings -o vg_name,lv_name,pool_lv,lv_dm_path,thin_id %s", snap_name);
 	f = popen(cmdline, "r");
 	if (!f) {
 		perror("popen failed");
 		exit(10);
 	}
 
-	matches = fscanf(f, " %ms %ms %ms %d",
+	matches = fscanf(f, " %ms %ms %ms %ms %d",
 			 &info->vg_name,
 			 &info->lv_name,
 			 &info->thin_pool_name,
+			 &info->dm_path,
 			 &info->thin_id);
-	if (matches != 4) {
-		fprintf(stderr, "failed to parse lvs output cmdline=%s\n", cmdline);
+	if (matches != 5) {
+		fprintf(stderr, "failed to parse lvs output %d cmdline=%s\n", matches, cmdline);
 		exit(10);
 	}
 	fclose(f);

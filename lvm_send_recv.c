@@ -1,10 +1,15 @@
 #define _GNU_SOURCE
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/sendfile.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <getopt.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include "thin_delta_scanner.h"
 
 struct snap_info {
@@ -14,11 +19,21 @@ struct snap_info {
 	int thin_id;
 };
 
-static void parse();
+struct chunk {
+	uint64_t magic;
+	uint64_t offset;
+	uint32_t length;
+	uint32_t cmd;
+} __attribute__((packed));
+
+static void parse_and_process(int in_fd, int out_fd);
 static void usage_exit(const char *prog_name, const char *reason);
 static void get_snap_info(const char *snap_name, struct snap_info *info);
 static int checked_asprintf(char **strp, const char *fmt, ...);
 static void checked_system(const char *fmt, ...);
+static void send_chunk(int in_fd, int out_fd, off64_t begin, size_t length);
+
+static const uint64_t MAGIC_VALUE = 0xe85bc5636cc72a05;
 
 int main(int argc, char **argv)
 {
@@ -29,7 +44,8 @@ int main(int argc, char **argv)
 
 	struct snap_info snap1, snap2;
 	char tmp_file_name[] = "lvm_send_recv_XXXXXXXX";
-	int option_index, c, tmp_fd;
+	int option_index, c, tmp_fd, snap2_fd;
+	char *snap2_file_name;
 
 	do {
 		c = getopt_long(argc, argv, "v", long_options, &option_index);
@@ -68,14 +84,21 @@ int main(int argc, char **argv)
 
 	yyin = fdopen(tmp_fd, "r");
 	if (!yyin) {
-		perror("failed to open file");
+		perror("failed to open tmpfile");
 		exit(10);
 	}
 
-	yyin = fopen(argv[optind], tmp_file_name);
+	checked_asprintf(&snap2_file_name, "/dev/%s/%s", snap2.vg_name, snap2.lv_name);
+	snap2_fd = open(snap2_file_name, O_RDONLY | O_DIRECT);
+	if (!snap2_fd < 0) {
+		perror("failed to open snap2");
+		exit(10);
+	}
 
-	parse();
+	parse_and_process(snap2_fd, fileno(stdout));
+
 	fclose(yyin);
+	close(snap2_fd);
 }
 
 static void get_snap_info(const char *snap_name, struct snap_info *info)
@@ -152,15 +175,15 @@ static const char *expect_attribute(int attribute)
 	return str_value;
 }
 
-static void parse()
+static void parse_and_process(int in_fd, int out_fd)
 {
-	long data_block_size;
+	long block_size;
 
 	expect_tag(TK_SUPERBLOCK);
 	expect_attribute(TK_UUID);
 	expect_attribute(TK_TIME);
 	expect_attribute(TK_TRANSACTION);
-	data_block_size = atol(expect_attribute(TK_DATA_BLOCK_SIZE));
+	block_size = atol(expect_attribute(TK_DATA_BLOCK_SIZE));
 	expect_attribute(TK_NR_DATA_BLOCKS);
 	expect('>');
 
@@ -170,7 +193,8 @@ static void parse()
 	expect('>');
 
 	while (true) {
-		long long begin, length;
+		off64_t begin;
+		size_t length;
 		int token;
 
 		expect('<');
@@ -184,19 +208,52 @@ static void parse()
 			length = atoll(expect_attribute(TK_LENGTH));
 			expect('/');
 			expect('>');
+
 			break;
 		case '/':
 			goto break_loop;
 		}
 		if (token == TK_DIFFERENT || token == TK_RIGHT_ONLY) {
-			printf("%lld %lld\n", begin, length);
+			send_chunk(in_fd, out_fd,
+				   begin * block_size * 512,
+				   length * block_size * 512);
 		}
+		/* handle a "left only" case by sending info to create a hole */
 	}
 break_loop:
 	expect(TK_DIFF);
 	expect('>');
 
 	expect_end_tag(TK_SUPERBLOCK);
+}
+
+static void send_chunk(int in_fd, int out_fd, off64_t begin, size_t length)
+{
+	int ret;
+	struct chunk chunk = {
+		.magic = MAGIC_VALUE,
+		.offset = htobe64(begin),
+		.length = htobe32(length),
+		.cmd = htobe32(0),
+	};
+
+	ret = write(out_fd, &chunk, sizeof(chunk));
+	if (ret == -1) {
+		perror("write failed");
+		exit(10);
+	} else if (ret != sizeof(chunk)) {
+		fprintf(stderr, "write returned %d instead of %ld\n", ret, sizeof(chunk));
+		exit(10);
+	}
+
+	ret = sendfile64(out_fd, in_fd, &begin, length);
+	if (ret == -1) {
+		perror("sendfile failed");
+		exit(10);
+	} else if (ret != length) {
+		fprintf(stderr, "sendfile returned %d instead of %ld", ret, length);
+		exit(10);
+	}
 }
 
 static int checked_asprintf(char **strp, const char *fmt, ...)

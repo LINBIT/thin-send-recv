@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <string.h>
 #include "thin_delta_scanner.h"
 
 struct snap_info {
@@ -40,37 +41,74 @@ static int checked_asprintf(char **strp, const char *fmt, ...);
 static void checked_system(const char *fmt, ...);
 static void send_header(int out_fd, off64_t begin, size_t length, enum cmd cmd);
 static void send_chunk(int in_fd, int out_fd, off64_t begin, size_t length);
+static void thin_send(const char *snap1_name, const char *snap2_name, int out_fd);
+static void thin_receive(const char *snap_name, int in_fd);
+static bool process_input(int in_fd, int out_fd);
 
 int main(int argc, char **argv)
 {
 	static struct option long_options[] = {
 		{"--version", no_argument, 0, 0 },
+		{"--send", no_argument, 0, 0 },
+		{"--receive", no_argument, 0, 0 },
 		{0,           0,           0, 0 }
 	};
 
 	struct snap_info snap1, snap2;
 	char tmp_file_name[] = "lvm_send_recv_XXXXXXXX";
 	int option_index, c, tmp_fd, snap2_fd;
+	bool send_mode = false, receive_mode = false;
 	char *snap2_file_name;
 
 	do {
-		c = getopt_long(argc, argv, "v", long_options, &option_index);
+		c = getopt_long(argc, argv, "vsr", long_options, &option_index);
 		switch (c) {
 		case 'v':
 			puts("0.11\n");
 			exit(0);
-		case '?': /* unknown opt*/
-		default: ;
+		case 's':
+			send_mode = true;
+			break;
+		case 'r':
+			receive_mode = true;
+			break;
+			/* case '?': unknown opt*/
+		default:
+			usage_exit(argv[0], "unknown option\n");
 		}
 	} while (c != -1);
 
-	if (optind != argc - 2) {
-		usage_exit(argv[0], "two positional arguments expected\n");
-		exit(10);
-	}
+	if (send_mode && receive_mode)
+		usage_exit(argv[0], "Can only send or receive\n");
 
-	get_snap_info(argv[optind], &snap1);
-	get_snap_info(argv[optind + 1], &snap2);
+	if (!(send_mode || receive_mode)) {
+		if (strstr(argv[0], "send"))
+			send_mode = true;
+		else if (strstr(argv[0], "receive") || strstr(argv[0], "recv"))
+			receive_mode = true;
+	}
+	if (!(send_mode || receive_mode))
+		usage_exit(argv[0], "Use --send or --receive\n");
+
+	if (send_mode) {
+		if (optind != argc - 2)
+			usage_exit(argv[0], "two positional arguments expected\n");
+
+		thin_send(argv[optind], argv[optind + 1], fileno(stdout));
+	} else {
+		thin_receive(argv[optind], fileno(stdin));
+	}
+}
+
+static void thin_send(const char *snap1_name, const char *snap2_name, int out_fd)
+{
+	struct snap_info snap1, snap2;
+	char tmp_file_name[] = "lvm_send_recv_XXXXXXXX";
+	int tmp_fd, snap2_fd;
+	char *snap2_file_name;
+
+	get_snap_info(snap1_name, &snap1);
+	get_snap_info(snap2_name, &snap2);
 
 	tmp_fd = mkstemp(tmp_file_name);
 	if (tmp_fd == -1) {
@@ -101,10 +139,33 @@ int main(int argc, char **argv)
 		exit(10);
 	}
 
-	parse_and_process(snap2_fd, fileno(stdout));
+	parse_and_process(snap2_fd, out_fd);
 
 	fclose(yyin);
 	close(snap2_fd);
+}
+
+static void thin_receive(const char *snap_name, int in_fd)
+{
+	struct snap_info snap;
+	char *snap_file_name;
+	int out_fd;
+	bool cont;
+
+	get_snap_info(snap_name, &snap);
+
+	checked_asprintf(&snap_file_name, "/dev/%s/%s", snap.vg_name, snap.lv_name);
+	out_fd = open(snap_file_name, O_WRONLY | O_DIRECT);
+	if (!out_fd < 0) {
+		perror("failed to open snap");
+		exit(10);
+	}
+
+	do {
+		cont = process_input(in_fd, out_fd);
+	} while (cont);
+
+	close(out_fd);
 }
 
 static void get_snap_info(const char *snap_name, struct snap_info *info)
@@ -242,7 +303,7 @@ static void send_header(int out_fd, off64_t begin, size_t length, enum cmd cmd)
 {
 	int ret;
 	struct chunk chunk = {
-		.magic = MAGIC_VALUE,
+		.magic = htobe64(MAGIC_VALUE),
 		.offset = htobe64(begin),
 		.length = htobe32(length),
 		.cmd = htobe32(cmd),
@@ -272,6 +333,58 @@ static void send_chunk(int in_fd, int out_fd, off64_t begin, size_t length)
 		fprintf(stderr, "sendfile returned %d instead of %ld", ret, length);
 		exit(10);
 	}
+}
+
+static bool process_input(int in_fd, int out_fd)
+{
+	struct chunk chunk;
+	off_t offset;
+	size_t length;
+	enum cmd cmd;
+	int ret;
+
+	ret = read(in_fd, &chunk, sizeof(chunk));
+	if (ret == -1) {
+		perror("read failed");
+		exit(10);
+	} else if (ret == 0) {
+		return false;
+	} else if (ret != sizeof(chunk)) {
+		fprintf(stderr, "read returned %d instead of %ld\n", ret, sizeof(chunk));
+		exit(10);
+	}
+
+	if (htobe64(MAGIC_VALUE) != chunk.magic) {
+		fprintf(stderr, "Magic value missmatch!\n");
+		exit(10);
+	}
+
+	offset = be64toh(chunk.offset);
+	length = be32toh(chunk.length);
+	cmd = be32toh(chunk.cmd);
+
+	switch (cmd) {
+	case CMD_DATA:
+		ret = copy_file_range(in_fd, NULL, out_fd, &offset, length, 0);
+		if (ret == -1) {
+			perror("copy_file_range() failed");
+			exit(10);
+		} else if (ret != length) {
+			fprintf(stderr, "copy_file_range() returned %d instead of %ld", ret, length);
+			exit(10);
+		}
+		break;
+
+	case CMD_UNMAP:
+		ret = fallocate(out_fd, FALLOC_FL_PUNCH_HOLE, offset, length);
+		if (ret == -1) {
+			perror("fallocate(, FALLOC_FL_PUNCH_HOLE,) failed");
+			exit(10);
+		}
+		break;
+	}
+
+	return true;
 }
 
 static int checked_asprintf(char **strp, const char *fmt, ...)

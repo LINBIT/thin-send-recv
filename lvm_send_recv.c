@@ -367,7 +367,6 @@ static int generic_copy_file_range(int in_fd, loff_t *in_off,
 {
 	const int buffer_size = 65536;
 	static void *buffer = NULL;
-	int ret, read_ret;
 
 	if (!buffer) {
 		buffer = aligned_alloc(4096, buffer_size);
@@ -375,28 +374,44 @@ static int generic_copy_file_range(int in_fd, loff_t *in_off,
 			return -1;
 	}
 
+	if (in_off) {
+		off_t r = lseek(in_fd, *in_off, SEEK_SET);
+		if (r == -1)
+			return -1;
+	}
+
+	if (out_off) {
+		off_t r = lseek(out_fd, *out_off, SEEK_SET);
+		if (r == -1)
+			return -1;
+	}
+
 	do {
-		if (in_off) {
-			off_t r = lseek(in_fd, *in_off, SEEK_SET);
-			if (r == -1)
-				return -1;
-		}
-		read_ret = read(in_fd, buffer, buffer_size < len ? buffer_size : len);
-		if (read_ret == -1)
-			return -1;
-		else if (read_ret == 0)
-			return 0;
+		int chunk = buffer_size < len ? buffer_size : len;
+		int ret, chu;
+		void *buf;
 
-		if (out_off) {
-			off_t r = lseek(out_fd, *out_off, SEEK_SET);
-			if (r == -1)
-				return -1;
-		}
-		ret = write(out_fd, buffer, read_ret);
-		if (ret == -1)
-			return -1;
+		chu = chunk;
+		buf = buffer;
+		do {
+			ret = read(in_fd, buf, chu);
+			if (ret == -1 || ret == 0)
+				return ret;
+			chu -= ret;
+			buf += ret;
+		} while (chu);
 
-		len -= read_ret;
+		chu = chunk;
+		buf = buffer;
+		do {
+			ret = write(out_fd, buf, chu);
+			if (ret == -1)
+				return -1;
+			chu -= ret;
+			buf += ret;
+		} while (chu);
+
+		len -= chunk;
 	} while (len);
 
 	return 0;

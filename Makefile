@@ -1,4 +1,5 @@
 all-obj = lvm_send_recv.o thin_delta_scanner.o
+CFLAGS = -o2 -Wall
 
 all:	lvm_send_recv
 
@@ -9,4 +10,4 @@ thin_delta_scanner.c: thin_delta_scanner.fl thin_delta_scanner.h
 	flex -othin_delta_scanner.c thin_delta_scanner.fl
 
 clean:
-	rm -rf $(all-obj) thin_delta_scanner.c
+	rm -rf $(all-obj) thin_delta_scanner.c *~ lvm_send_recv

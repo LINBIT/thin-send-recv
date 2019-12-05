@@ -40,8 +40,8 @@ static void usage_exit(const char *prog_name, const char *reason);
 static void get_snap_info(const char *snap_name, struct snap_info *info);
 static int checked_asprintf(char **strp, const char *fmt, ...);
 static void checked_system(const char *fmt, ...);
-static void send_header(int out_fd, off64_t begin, size_t length, enum cmd cmd);
-static void send_chunk(int in_fd, int out_fd, off64_t begin, size_t length);
+static void send_header(int out_fd, loff_t begin, size_t length, enum cmd cmd);
+static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length);
 static void thin_send(const char *snap1_name, const char *snap2_name, int out_fd);
 static void thin_receive(const char *snap_name, int in_fd);
 static bool process_input(int in_fd, int out_fd);
@@ -49,17 +49,15 @@ static bool process_input(int in_fd, int out_fd);
 int main(int argc, char **argv)
 {
 	static struct option long_options[] = {
-		{"version", no_argument, 0, 'v' },
-		{"send",    no_argument, 0, 's' },
-		{"receive", no_argument, 0, 'r' },
-		{0,         0,           0, 0 }
+		{"version",   no_argument, 0, 'v' },
+		{"send",      no_argument, 0, 's' },
+		{"receive",   no_argument, 0, 'r' },
+		{"allow-tty", no_argument, 0, 't' },
+		{0,         0,             0, 0 }
 	};
 
-	struct snap_info snap1, snap2;
-	char tmp_file_name[] = "lvm_send_recv_XXXXXX";
-	int option_index, c, tmp_fd, snap2_fd;
-	bool send_mode = false, receive_mode = false;
-	char *snap2_file_name;
+	bool send_mode = false, receive_mode = false, allow_tty = false;
+	int option_index, c;
 
 	do {
 		c = getopt_long(argc, argv, "vsr", long_options, &option_index);
@@ -72,6 +70,9 @@ int main(int argc, char **argv)
 			break;
 		case 'r':
 			receive_mode = true;
+			break;
+		case 't':
+			allow_tty = true;
 			break;
 		case -1:
 			break;
@@ -97,8 +98,20 @@ int main(int argc, char **argv)
 		if (optind != argc - 2)
 			usage_exit(argv[0], "two positional arguments expected\n");
 
+		if (!allow_tty && isatty(fileno(stdout))) {
+			fprintf(stderr, "Not dumping the data stream onto your terminal\n"
+				"If you really like that try --allow-tty\n");
+			exit(10);
+		}
+
 		thin_send(argv[optind], argv[optind + 1], fileno(stdout));
 	} else {
+		if (!allow_tty && isatty(fileno(stdin))) {
+			fprintf(stderr, "Expecting a data stream on stdin\n"
+				"If you really like that try --allow-tty\n");
+			exit(10);
+		}
+
 		thin_receive(argv[optind], fileno(stdin));
 	}
 }
@@ -161,8 +174,8 @@ static void thin_send(const char *snap1_name, const char *snap2_name, int out_fd
 		exit(10);
 	}
 
-	snap2_fd = open(snap2.dm_path, O_RDONLY | O_DIRECT | FD_CLOEXEC);
-	if (!snap2_fd < 0) {
+	snap2_fd = open(snap2.dm_path, O_RDONLY | O_DIRECT | O_CLOEXEC);
+	if (snap2_fd == -1) {
 		perror("failed to open snap2");
 		exit(10);
 	}
@@ -183,8 +196,8 @@ static void thin_receive(const char *snap_name, int in_fd)
 	get_snap_info(snap_name, &snap);
 
 	checked_asprintf(&snap_file_name, "/dev/%s/%s", snap.vg_name, snap.lv_name);
-	out_fd = open(snap_file_name, O_WRONLY | O_DIRECT | FD_CLOEXEC);
-	if (!out_fd < 0) {
+	out_fd = open(snap_file_name, O_WRONLY | O_DIRECT | O_CLOEXEC);
+	if (out_fd == -1) {
 		perror("failed to open snap");
 		exit(10);
 	}
@@ -289,7 +302,7 @@ static void parse_and_process(int in_fd, int out_fd)
 	expect('>');
 
 	while (true) {
-		off64_t begin;
+		loff_t begin;
 		size_t length;
 		int token;
 
@@ -328,7 +341,7 @@ break_loop:
 	expect_end_tag(TK_SUPERBLOCK);
 }
 
-static void send_header(int out_fd, off64_t begin, size_t length, enum cmd cmd)
+static void send_header(int out_fd, loff_t begin, size_t length, enum cmd cmd)
 {
 	int ret;
 	struct chunk chunk = {
@@ -348,18 +361,56 @@ static void send_header(int out_fd, off64_t begin, size_t length, enum cmd cmd)
 	}
 }
 
-static void send_chunk(int in_fd, int out_fd, off64_t begin, size_t length)
+static int generic_copy_file_range(int in_fd, loff_t *in_off,
+				   int out_fd, loff_t *out_off,
+				   size_t len, unsigned int flags)
+{
+	const int buffer_size = 65536;
+	static void *buffer = NULL;
+	int ret, read_ret;
+
+	if (!buffer) {
+		buffer = aligned_alloc(4096, buffer_size);
+		if (!buffer)
+			return -1;
+	}
+
+	do {
+		if (in_off) {
+			off_t r = lseek(in_fd, *in_off, SEEK_SET);
+			if (r == -1)
+				return -1;
+		}
+		read_ret = read(in_fd, buffer, buffer_size < len ? buffer_size : len);
+		if (read_ret == -1)
+			return -1;
+		else if (read_ret == 0)
+			return 0;
+
+		if (out_off) {
+			off_t r = lseek(out_fd, *out_off, SEEK_SET);
+			if (r == -1)
+				return -1;
+		}
+		ret = write(out_fd, buffer, read_ret);
+		if (ret == -1)
+			return -1;
+
+		len -= read_ret;
+	} while (len);
+
+	return 0;
+}
+
+static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length)
 {
 	int ret;
 
 	send_header(out_fd, begin, length, CMD_DATA);
 
-	ret = sendfile64(out_fd, in_fd, &begin, length);
+	ret = generic_copy_file_range(in_fd, &begin, out_fd, NULL, length, 0);
 	if (ret == -1) {
-		perror("sendfile failed");
-		exit(10);
-	} else if (ret != length) {
-		fprintf(stderr, "sendfile returned %d instead of %ld", ret, length);
+		perror("generic_copy_file_range() failed");
 		exit(10);
 	}
 }
@@ -394,12 +445,9 @@ static bool process_input(int in_fd, int out_fd)
 
 	switch (cmd) {
 	case CMD_DATA:
-		ret = copy_file_range(in_fd, NULL, out_fd, &offset, length, 0);
+		ret = generic_copy_file_range(in_fd, NULL, out_fd, &offset, length, 0);
 		if (ret == -1) {
-			perror("copy_file_range() failed");
-			exit(10);
-		} else if (ret != length) {
-			fprintf(stderr, "copy_file_range() returned %d instead of %ld", ret, length);
+			perror("generic_copy_file_range() failed");
 			exit(10);
 		}
 		break;

@@ -1,0 +1,18 @@
+thin_send & thin_recv
+
+This utility mimics zfs send and zfs recv for the LVM thin world.
+
+Author Philipp Reisner <philipp.reisner@linbit.com>
+License GPLv3
+
+Examples of how to use:
+
+$ thin_send ssd_vg/CentOS7.6 ssd_vg/li0 | ssh root@target-machine thin_recv kubuntu-vg/li0
+
+or:
+
+target-machine$ socat TCP-LISTEN:4321 STDOUT | zstd -d | thin_recv kubuntu-vg/li0
+source-machine$ thin_send ssd_vg/CentOS7.6 ssd_vg/li0 | zstd | socat STDIN TCP:10.43.8.39:4321
+
+One day I might have the time to try to contribute it to the upstream
+thin-provisioning-tools, this is the place where this should be.

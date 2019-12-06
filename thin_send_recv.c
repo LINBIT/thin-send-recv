@@ -36,7 +36,7 @@ enum cmd {
 static const uint64_t MAGIC_VALUE = 0xe85bc5636cc72a05;
 
 static void parse_and_process(int in_fd, int out_fd);
-static void usage_exit(const char *prog_name, const char *reason);
+static void usage_exit(const struct option *long_options, const char *reason);
 static void get_snap_info(const char *snap_name, struct snap_info *info);
 static int checked_asprintf(char **strp, const char *fmt, ...);
 static void checked_system(const char *fmt, ...);
@@ -53,6 +53,7 @@ int main(int argc, char **argv)
 		{"send",      no_argument, 0, 's' },
 		{"receive",   no_argument, 0, 'r' },
 		{"allow-tty", no_argument, 0, 't' },
+		{"about",     no_argument, 0, 'a' },
 		{0,         0,             0, 0 }
 	};
 
@@ -66,10 +67,10 @@ int main(int argc, char **argv)
 			puts("Philipp Reisner <philipp.reisner@linbit.com> wrote this because\n"
 			     "it is embarrassing that this does not ship with the LVM tools.\n"
 			     "\n"
-			     "GPLv3\n");
+			     "License: GPLv3");
 			exit(0);
 		case 'v':
-			puts("0.11\n");
+			puts("0.11");
 			exit(0);
 		case 's':
 			send_mode = true;
@@ -84,25 +85,22 @@ int main(int argc, char **argv)
 			break;
 			/* case '?': unknown opt*/
 		default:
-			usage_exit(argv[0], "unknown option\n");
+			usage_exit(long_options, "unknown option\n");
 		}
 	} while (c != -1);
-
-	if (send_mode && receive_mode)
-		usage_exit(argv[0], "Can only send or receive\n");
 
 	if (!(send_mode || receive_mode)) {
 		if (strstr(argv[0], "send"))
 			send_mode = true;
-		else if (strstr(argv[0], "receive") || strstr(argv[0], "recv"))
+		if (strstr(argv[0], "receive") || strstr(argv[0], "recv"))
 			receive_mode = true;
 	}
-	if (!(send_mode || receive_mode))
-		usage_exit(argv[0], "Use --send or --receive\n");
+	if (!(send_mode || receive_mode) || (send_mode && receive_mode))
+		usage_exit(long_options, "Use --send or --receive\n");
 
 	if (send_mode) {
 		if (optind != argc - 2)
-			usage_exit(argv[0], "two positional arguments expected\n");
+			usage_exit(long_options, "two positional arguments expected\n");
 
 		if (!allow_tty && isatty(fileno(stdout))) {
 			fprintf(stderr, "Not dumping the data stream onto your terminal\n"
@@ -112,6 +110,9 @@ int main(int argc, char **argv)
 
 		thin_send(argv[optind], argv[optind + 1], fileno(stdout));
 	} else {
+		if (optind != argc - 1)
+			usage_exit(long_options, "One positional argument expected\n");
+
 		if (!allow_tty && isatty(fileno(stdin))) {
 			fprintf(stderr, "Expecting a data stream on stdin\n"
 				"If you really like that try --allow-tty\n");
@@ -241,12 +242,22 @@ static void get_snap_info(const char *snap_name, struct snap_info *info)
 	fclose(f);
 }
 
-static void usage_exit(const char *prog_name, const char *reason)
+static void usage_exit(const struct option *long_options, const char *reason)
 {
+	const struct option *opt;
+
 	if (reason)
 		fputs(reason, stderr);
 
-	fprintf(stderr, "%s [--version] snapshot1 snapshot2\n", prog_name);
+	fputs("\nUSAGE:\n"
+	      "thin_send [options] snapshot1 snapshot2\n"
+	      "thin_recv [options] snapshot\n"
+	      "\n"
+	      "Options:\n", stderr);
+
+	for (opt = long_options; opt->name; opt++)
+		fprintf(stderr, "  --%s | -%c\n", opt->name, opt->val);
+
 	exit(10);
 }
 

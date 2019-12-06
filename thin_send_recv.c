@@ -148,7 +148,7 @@ static char *get_thin_pool_dm_path(const struct snap_info *snap)
 static void thin_send(const char *snap1_name, const char *snap2_name, int out_fd)
 {
 	struct snap_info snap1, snap2;
-	char tmp_file_name[] = "/tmp/lvm_send_recv_XXXXXXXX";
+	char tmp_file_name[] = "/tmp/thin_send_recv_XXXXXX";
 	char *thin_pool_dm_path;
 	int tmp_fd, snap2_fd;
 

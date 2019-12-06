@@ -60,8 +60,14 @@ int main(int argc, char **argv)
 	int option_index, c;
 
 	do {
-		c = getopt_long(argc, argv, "vsr", long_options, &option_index);
+		c = getopt_long(argc, argv, "vsrta", long_options, &option_index);
 		switch (c) {
+		case 'a':
+			puts("Philipp Reisner <philipp.reisner@linbit.com> wrote this because\n"
+			     "it is embarrassing that this does not ship with the LVM tools.\n"
+			     "\n"
+			     "GPLv3\n");
+			exit(0);
 		case 'v':
 			puts("0.11\n");
 			exit(0);
@@ -244,8 +250,6 @@ static void usage_exit(const char *prog_name, const char *reason)
 	exit(10);
 }
 
-
-/* */
 static void expected_got(int expected, int got)
 {
 	fprintf(stderr, "Got unexpected token %d. Expected a %d\n", got, expected);

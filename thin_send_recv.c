@@ -35,14 +35,16 @@ enum cmd {
 
 static const uint64_t MAGIC_VALUE = 0xe85bc5636cc72a05;
 
-static void parse_and_process(int in_fd, int out_fd);
+static void parse_diff(int in_fd, int out_fd);
+static void parse_dump(int in_fd, int out_fd);
 static void usage_exit(const struct option *long_options, const char *reason);
 static void get_snap_info(const char *snap_name, struct snap_info *info);
 static int checked_asprintf(char **strp, const char *fmt, ...);
 static void checked_system(const char *fmt, ...);
 static void send_header(int out_fd, loff_t begin, size_t length, enum cmd cmd);
 static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length, size_t block_size);
-static void thin_send(const char *snap1_name, const char *snap2_name, int out_fd);
+static void thin_send_vol(const char *vol_name, int out_fd);
+static void thin_send_diff(const char *snap1_name, const char *snap2_name, int out_fd);
 static void thin_receive(const char *snap_name, int in_fd);
 static bool process_input(int in_fd, int out_fd);
 
@@ -99,16 +101,18 @@ int main(int argc, char **argv)
 		usage_exit(long_options, "Use --send or --receive\n");
 
 	if (send_mode) {
-		if (optind != argc - 2)
-			usage_exit(long_options, "two positional arguments expected\n");
-
 		if (!allow_tty && isatty(fileno(stdout))) {
 			fprintf(stderr, "Not dumping the data stream onto your terminal\n"
 				"If you really like that try --allow-tty\n");
 			exit(10);
 		}
 
-		thin_send(argv[optind], argv[optind + 1], fileno(stdout));
+		if (optind == argc - 1)
+			thin_send_vol(argv[optind], fileno(stdout));
+		else if (optind == argc - 2)
+			thin_send_diff(argv[optind], argv[optind + 1], fileno(stdout));
+		else
+			usage_exit(long_options, "One or two positional arguments expected\n");
 	} else {
 		if (optind != argc - 1)
 			usage_exit(long_options, "One positional argument expected\n");
@@ -146,7 +150,7 @@ static char *get_thin_pool_dm_path(const struct snap_info *snap)
 	return thin_pool_dm_path;
 }
 
-static void thin_send(const char *snap1_name, const char *snap2_name, int out_fd)
+static void thin_send_diff(const char *snap1_name, const char *snap2_name, int out_fd)
 {
 	struct snap_info snap1, snap2;
 	char tmp_file_name[] = "/tmp/thin_send_recv_XXXXXX";
@@ -187,10 +191,55 @@ static void thin_send(const char *snap1_name, const char *snap2_name, int out_fd
 		exit(10);
 	}
 
-	parse_and_process(snap2_fd, out_fd);
+	parse_diff(snap2_fd, out_fd);
 
 	fclose(yyin);
 	close(snap2_fd);
+}
+
+static void thin_send_vol(const char *vol_name, int out_fd)
+{
+	struct snap_info vol;
+	char tmp_file_name[] = "/tmp/thin_send_recv_XXXXXX";
+	char *thin_pool_dm_path;
+	int tmp_fd, vol_fd;
+
+	get_snap_info(vol_name, &vol);
+
+	tmp_fd = mkstemp(tmp_file_name);
+	if (tmp_fd == -1) {
+		perror("failed creating tmp file");
+		exit(10);
+	}
+	fcntl(tmp_fd, F_SETFD, FD_CLOEXEC);
+
+	thin_pool_dm_path = get_thin_pool_dm_path(&vol);
+	checked_system("dmsetup message %s-tpool 0 reserve_metadata_snap",
+		       thin_pool_dm_path);
+
+	checked_system("thin_dump -m 0 --dev-id %d %s_tmeta > %s",
+		       vol.thin_id, thin_pool_dm_path, tmp_file_name);
+	unlink(tmp_file_name);
+
+	checked_system("dmsetup message %s-tpool 0 release_metadata_snap",
+		       thin_pool_dm_path);
+
+	yyin = fdopen(tmp_fd, "r");
+	if (!yyin) {
+		perror("failed to open tmpfile");
+		exit(10);
+	}
+
+	vol_fd = open(vol.dm_path, O_RDONLY | O_DIRECT | O_CLOEXEC);
+	if (vol_fd == -1) {
+		perror("failed to open snap2");
+		exit(10);
+	}
+
+	parse_dump(vol_fd, out_fd);
+
+	fclose(yyin);
+	close(vol_fd);
 }
 
 static void thin_receive(const char *snap_name, int in_fd)
@@ -251,7 +300,8 @@ static void usage_exit(const struct option *long_options, const char *reason)
 
 	fputs("\nUSAGE:\n"
 	      "thin_send [options] snapshot1 snapshot2\n"
-	      "thin_recv [options] snapshot\n"
+	      "thin_send [options] volume|snapshot\n"
+	      "thin_recv [options] volume|snapshot\n"
 	      "\n"
 	      "Options:\n", stderr);
 
@@ -299,7 +349,7 @@ static const char *expect_attribute(int attribute)
 	return str_value;
 }
 
-static void parse_and_process(int in_fd, int out_fd)
+static void parse_diff(int in_fd, int out_fd)
 {
 	long block_size;
 
@@ -352,6 +402,66 @@ static void parse_and_process(int in_fd, int out_fd)
 	}
 break_loop:
 	expect(TK_DIFF);
+	expect('>');
+
+	expect_end_tag(TK_SUPERBLOCK);
+}
+
+static void parse_dump(int in_fd, int out_fd)
+{
+	long block_size;
+
+	expect_tag(TK_SUPERBLOCK);
+	expect_attribute(TK_UUID);
+	expect_attribute(TK_TIME);
+	expect_attribute(TK_TRANSACTION);
+	expect_attribute(TK_FLAGS);
+	expect_attribute(TK_VERSION);
+	block_size = atol(expect_attribute(TK_DATA_BLOCK_SIZE));
+	expect_attribute(TK_NR_DATA_BLOCKS);
+	expect('>');
+
+	expect_tag(TK_DEVICE);
+	expect_attribute(TK_MAPPED_BLOCKS);
+	expect_attribute(TK_TRANSACTION);
+	expect_attribute(TK_CREATION_TIME);
+	expect_attribute(TK_SNAP_TIME);
+	expect('>');
+
+	while (true) {
+		loff_t begin;
+		size_t length;
+		int token;
+
+		expect('<');
+		token = yylex();
+		switch (token) {
+		case TK_SINGLE_MAPPING:
+			length = 1;
+			begin = atoll(expect_attribute(TK_ORIGIN_BLOCK));
+			expect_attribute(TK_DATA_BLOCK);
+			expect_attribute(TK_TIME);
+			break;
+		case TK_RANGE_MAPPING:
+			begin = atoll(expect_attribute(TK_ORIGIN_BEGIN));
+			expect_attribute(TK_DATA_BEGIN);
+			length = atoll(expect_attribute(TK_LENGTH));
+			expect_attribute(TK_TIME);
+			break;
+
+		case '/':
+			goto break_loop;
+		}
+		expect('/');
+		expect('>');
+
+		send_chunk(in_fd, out_fd,
+			   begin * block_size * 512,
+			   length * block_size * 512,
+			   block_size * 512);
+	}
+break_loop:
+	expect(TK_DEVICE);
 	expect('>');
 
 	expect_end_tag(TK_SUPERBLOCK);

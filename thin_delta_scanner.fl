@@ -10,7 +10,6 @@ char *str_value;
 %}
 
 %option noyywrap
-%option yylineno
 %option nounput
 
 WS              [ \t\r\n]
@@ -35,13 +34,26 @@ left		DP; return TK_LEFT;
 uuid		DP; return TK_UUID;
 time		DP; return TK_TIME;
 same 		DP; return TK_SAME;
+flags		DP; return TK_FLAGS;
 right		DP; return TK_RIGHT;
 begin		DP; return TK_BEGIN;
+device		DP; return TK_DEVICE;
+dev_id		DP; return TK_DEV_ID;
 length		DP; return TK_LENGTH;
+version		DP; return TK_VERSION;
 different 	DP; return TK_DIFFERENT;
 left_only	DP; return TK_LEFT_ONLY;
+snap_time	DP; return TK_SNAP_TIME;
+data_block	DP; return TK_DATA_BLOCK;
+data_begin	DP; return TK_DATA_BEGIN;
 right_only 	DP; return TK_RIGHT_ONLY;
 superblock      DP; return TK_SUPERBLOCK;
 transaction	DP; return TK_TRANSACTION;
+origin_block	DP; return TK_ORIGIN_BLOCK;
+origin_begin	DP; return TK_ORIGIN_BEGIN;
+mapped_blocks	DP; return TK_MAPPED_BLOCKS;
+creation_time	DP; return TK_CREATION_TIME;
+range_mapping	DP; return TK_RANGE_MAPPING;
 nr_data_blocks  DP; return TK_NR_DATA_BLOCKS;
+single_mapping	DP; return TK_SINGLE_MAPPING;
 data_block_size DP; return TK_DATA_BLOCK_SIZE;

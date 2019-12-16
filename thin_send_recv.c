@@ -41,7 +41,7 @@ static void get_snap_info(const char *snap_name, struct snap_info *info);
 static int checked_asprintf(char **strp, const char *fmt, ...);
 static void checked_system(const char *fmt, ...);
 static void send_header(int out_fd, loff_t begin, size_t length, enum cmd cmd);
-static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length);
+static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length, size_t block_size);
 static void thin_send(const char *snap1_name, const char *snap2_name, int out_fd);
 static void thin_receive(const char *snap_name, int in_fd);
 static bool process_input(int in_fd, int out_fd);
@@ -340,7 +340,8 @@ static void parse_and_process(int in_fd, int out_fd)
 		if (token == TK_DIFFERENT || token == TK_RIGHT_ONLY) {
 			send_chunk(in_fd, out_fd,
 				   begin * block_size * 512,
-				   length * block_size * 512);
+				   length * block_size * 512,
+				   block_size * 512);
 		} else if (token == TK_LEFT_ONLY) {
 			send_header(out_fd,
 				    begin * block_size * 512,
@@ -376,17 +377,19 @@ static void send_header(int out_fd, loff_t begin, size_t length, enum cmd cmd)
 	}
 }
 
-static int generic_copy_file_range(int in_fd, loff_t *in_off,
-				   int out_fd, loff_t *out_off,
-				   size_t len, unsigned int flags)
+static int copy_data(int in_fd, loff_t *in_off,
+		     int out_fd, loff_t *out_off,
+		     size_t len, size_t buffer_size)
 {
-	const int buffer_size = 65536;
+	static size_t allocated_buffer_size = 0;
 	static void *buffer = NULL;
 
-	if (!buffer) {
-		buffer = aligned_alloc(4096, buffer_size);
+	if (!buffer || allocated_buffer_size < buffer_size) {
+		free(buffer);
+		buffer = aligned_alloc(sysconf(_SC_PAGESIZE), buffer_size);
 		if (!buffer)
 			return -1;
+		allocated_buffer_size = buffer_size;
 	}
 
 	if (in_off) {
@@ -432,15 +435,15 @@ static int generic_copy_file_range(int in_fd, loff_t *in_off,
 	return 0;
 }
 
-static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length)
+static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length, size_t block_size)
 {
 	int ret;
 
 	send_header(out_fd, begin, length, CMD_DATA);
 
-	ret = generic_copy_file_range(in_fd, &begin, out_fd, NULL, length, 0);
+	ret = copy_data(in_fd, &begin, out_fd, NULL, length, block_size);
 	if (ret == -1) {
-		perror("generic_copy_file_range() failed");
+		perror("copy_data() failed");
 		exit(10);
 	}
 }
@@ -475,9 +478,9 @@ static bool process_input(int in_fd, int out_fd)
 
 	switch (cmd) {
 	case CMD_DATA:
-		ret = generic_copy_file_range(in_fd, NULL, out_fd, &offset, length, 0);
+		ret = copy_data(in_fd, NULL, out_fd, &offset, length, 65536);
 		if (ret == -1) {
-			perror("generic_copy_file_range() failed");
+			perror("copy_data() failed");
 			exit(10);
 		}
 		break;

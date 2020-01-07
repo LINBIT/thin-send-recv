@@ -10,7 +10,7 @@ thin_send_recv: $(all-obj)
 	$(LINK.c) $(LDFLAGS) -o $@ $^
 
 thin_delta_scanner.c: thin_delta_scanner.fl thin_delta_scanner.h
-	flex -othin_delta_scanner.c thin_delta_scanner.fl
+	flex -s -othin_delta_scanner.c thin_delta_scanner.fl
 
 install: thin_send_recv
 	install -t $(PREFIX)/usr/bin thin_send_recv

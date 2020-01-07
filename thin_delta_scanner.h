@@ -31,6 +31,7 @@ enum token {
 	TK_NR_DATA_BLOCKS,
 	TK_SINGLE_MAPPING,
 	TK_DATA_BLOCK_SIZE,
+	TK_UNEXPECTED_TOKEN,
 };
 
 extern FILE* yyin;

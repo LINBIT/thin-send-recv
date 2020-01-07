@@ -11,6 +11,7 @@ char *str_value;
 
 %option noyywrap
 %option nounput
+%option noinput
 
 WS              [ \t\r\n]
 OP		[<>=/]
@@ -57,3 +58,4 @@ range_mapping	DP; return TK_RANGE_MAPPING;
 nr_data_blocks  DP; return TK_NR_DATA_BLOCKS;
 single_mapping	DP; return TK_SINGLE_MAPPING;
 data_block_size DP; return TK_DATA_BLOCK_SIZE;
+.		DP; return TK_UNEXPECTED_TOKEN;

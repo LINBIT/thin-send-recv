@@ -101,6 +101,9 @@ int main(int argc, char **argv)
 		usage_exit(long_options, "Use --send or --receive\n");
 
 	if (send_mode) {
+		if (optind != argc - 1 && optind != argc -2)
+			usage_exit(long_options, "One or two positional arguments expected\n");
+
 		if (!allow_tty && isatty(fileno(stdout))) {
 			fprintf(stderr, "Not dumping the data stream onto your terminal\n"
 				"If you really like that try --allow-tty\n");
@@ -111,8 +114,6 @@ int main(int argc, char **argv)
 			thin_send_vol(argv[optind], fileno(stdout));
 		else if (optind == argc - 2)
 			thin_send_diff(argv[optind], argv[optind + 1], fileno(stdout));
-		else
-			usage_exit(long_options, "One or two positional arguments expected\n");
 	} else {
 		if (optind != argc - 1)
 			usage_exit(long_options, "One positional argument expected\n");
@@ -217,7 +218,7 @@ static void thin_send_vol(const char *vol_name, int out_fd)
 	checked_system("dmsetup message %s-tpool 0 reserve_metadata_snap",
 		       thin_pool_dm_path);
 
-	checked_system("thin_dump -m 0 --dev-id %d %s_tmeta > %s",
+	checked_system("thin_dump -m --dev-id %d %s_tmeta > %s",
 		       vol.thin_id, thin_pool_dm_path, tmp_file_name);
 	unlink(tmp_file_name);
 

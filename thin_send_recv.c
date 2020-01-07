@@ -40,7 +40,7 @@ static void parse_dump(int in_fd, int out_fd);
 static void usage_exit(const struct option *long_options, const char *reason);
 static void get_snap_info(const char *snap_name, struct snap_info *info);
 static int checked_asprintf(char **strp, const char *fmt, ...);
-static void checked_system(const char *fmt, ...);
+static int system_fmt(const char *fmt, ...);
 static void send_header(int out_fd, loff_t begin, size_t length, enum cmd cmd);
 static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length, size_t block_size);
 static void thin_send_vol(const char *vol_name, int out_fd);
@@ -156,7 +156,7 @@ static void thin_send_diff(const char *snap1_name, const char *snap2_name, int o
 	struct snap_info snap1, snap2;
 	char tmp_file_name[] = "/tmp/thin_send_recv_XXXXXX";
 	char *thin_pool_dm_path;
-	int tmp_fd, snap2_fd;
+	int err, tmp_fd, snap2_fd;
 
 	get_snap_info(snap1_name, &snap1);
 	get_snap_info(snap2_name, &snap2);
@@ -169,16 +169,23 @@ static void thin_send_diff(const char *snap1_name, const char *snap2_name, int o
 	fcntl(tmp_fd, F_SETFD, FD_CLOEXEC);
 
 	thin_pool_dm_path = get_thin_pool_dm_path(&snap2);
-	checked_system("dmsetup message %s-tpool 0 reserve_metadata_snap",
-		       thin_pool_dm_path);
+	err = system_fmt("dmsetup message %s-tpool 0 reserve_metadata_snap",
+			 thin_pool_dm_path);
+	if (err) {
+		unlink(tmp_file_name);
+		exit(10);
+	}
 
-	checked_system("thin_delta -m --snap1 %d --snap2 %d %s_tmeta > %s",
-		       snap1.thin_id, snap2.thin_id, thin_pool_dm_path,
-		       tmp_file_name);
+	err = system_fmt("thin_delta -m --snap1 %d --snap2 %d %s_tmeta > %s",
+			 snap1.thin_id, snap2.thin_id, thin_pool_dm_path,
+			 tmp_file_name);
 	unlink(tmp_file_name);
 
-	checked_system("dmsetup message %s-tpool 0 release_metadata_snap",
-		       thin_pool_dm_path);
+	system_fmt("dmsetup message %s-tpool 0 release_metadata_snap",
+		   thin_pool_dm_path);
+
+	if (err)
+		exit(10);
 
 	yyin = fdopen(tmp_fd, "r");
 	if (!yyin) {
@@ -203,7 +210,7 @@ static void thin_send_vol(const char *vol_name, int out_fd)
 	struct snap_info vol;
 	char tmp_file_name[] = "/tmp/thin_send_recv_XXXXXX";
 	char *thin_pool_dm_path;
-	int tmp_fd, vol_fd;
+	int err, tmp_fd, vol_fd;
 
 	get_snap_info(vol_name, &vol);
 
@@ -215,15 +222,21 @@ static void thin_send_vol(const char *vol_name, int out_fd)
 	fcntl(tmp_fd, F_SETFD, FD_CLOEXEC);
 
 	thin_pool_dm_path = get_thin_pool_dm_path(&vol);
-	checked_system("dmsetup message %s-tpool 0 reserve_metadata_snap",
-		       thin_pool_dm_path);
+	err = system_fmt("dmsetup message %s-tpool 0 reserve_metadata_snap",
+			 thin_pool_dm_path);
+	if (err) {
+		unlink(tmp_file_name);
+		exit(10);
+	}
 
-	checked_system("thin_dump -m --dev-id %d %s_tmeta > %s",
-		       vol.thin_id, thin_pool_dm_path, tmp_file_name);
+	err = system_fmt("thin_dump -m --dev-id %d %s_tmeta > %s",
+			 vol.thin_id, thin_pool_dm_path, tmp_file_name);
 	unlink(tmp_file_name);
 
-	checked_system("dmsetup message %s-tpool 0 release_metadata_snap",
-		       thin_pool_dm_path);
+	system_fmt("dmsetup message %s-tpool 0 release_metadata_snap",
+		   thin_pool_dm_path);
+	if (err)
+		exit(10);
 
 	yyin = fdopen(tmp_fd, "r");
 	if (!yyin) {
@@ -625,7 +638,7 @@ static int checked_asprintf(char **strp, const char *fmt, ...)
         return chars;
 }
 
-static void checked_system(const char *fmt, ...)
+static int system_fmt(const char *fmt, ...)
 {
 	va_list ap;
 	char *cmdline;
@@ -644,6 +657,8 @@ static void checked_system(const char *fmt, ...)
 	ret = system(cmdline);
 	if (!(WIFEXITED(ret) && WEXITSTATUS(ret) == 0)) {
 		fprintf(stderr, "cmd %s exited with %d\n", cmdline, WEXITSTATUS(ret));
-		exit(10);
+		return WEXITSTATUS(ret);
 	}
+
+	return 0;
 }

@@ -72,7 +72,7 @@ int main(int argc, char **argv)
 			     "License: GPLv3");
 			exit(0);
 		case 'v':
-			puts("0.11");
+			puts(VERSION);
 			exit(0);
 		case 's':
 			send_mode = true;

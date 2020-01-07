@@ -436,6 +436,7 @@ static void parse_dump(int in_fd, int out_fd)
 	expect('>');
 
 	expect_tag(TK_DEVICE);
+	expect_attribute(TK_DEV_ID);
 	expect_attribute(TK_MAPPED_BLOCKS);
 	expect_attribute(TK_TRANSACTION);
 	expect_attribute(TK_CREATION_TIME);

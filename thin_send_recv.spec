@@ -2,12 +2,14 @@ Name: thin-send-recv
 Version: 0.11
 Release: 1
 Summary: send and receive for LVM thin volumes
-
 License: GPLv3+
-Source0: %{name}-%{version}-%{release}.tar.gz
+
+Requires: /usr/sbin/lvs
 Requires: /usr/sbin/thin_dump
 Requires: /usr/sbin/thin_delta
 Requires: /bin/sh
+
+Source0: %{name}-%{version}-%{release}.tar.gz
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
 BuildRequires: flex make gcc
 

@@ -126,6 +126,8 @@ int main(int argc, char **argv)
 
 		thin_receive(argv[optind], fileno(stdin));
 	}
+
+	return 0;
 }
 
 static char *get_thin_pool_dm_path(const struct snap_info *snap)

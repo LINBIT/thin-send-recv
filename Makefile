@@ -15,9 +15,10 @@ thin_delta_scanner.c: thin_delta_scanner.fl thin_delta_scanner.h
 	flex -s -othin_delta_scanner.c thin_delta_scanner.fl
 
 install: thin_send_recv
-	install -D thin_send_recv $(PREFIX)/usr/bin/thin_send_recv
-	cd $(PREFIX)/usr/bin ; ln -f -s thin_send_recv thin_send
-	cd $(PREFIX)/usr/bin ; ln -f -s thin_send_recv thin_recv
+	mkdir -p $(DESTDIR)/usr/bin
+	install -D thin_send_recv $(DESTDIR)/usr/bin/thin_send_recv
+	cd $(DESTDIR)/usr/bin ; ln -f -s thin_send_recv thin_send
+	cd $(DESTDIR)/usr/bin ; ln -f -s thin_send_recv thin_recv
 
 tgz: $(all-src)
 	tar --transform="flags=rSh;s,^,thin-send-recv-$(VERSION)/," \

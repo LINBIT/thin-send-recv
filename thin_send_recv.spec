@@ -29,7 +29,7 @@ make EXTRA_CFLAGS=-g
 
 %install
 rm -rf $RPM_BUILD_ROOT
-make install PREFIX=$RPM_BUILD_ROOT
+make install DESTDIR=$RPM_BUILD_ROOT
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -40,6 +40,6 @@ rm -rf $RPM_BUILD_ROOT
 %{_bindir}/*
 
 %changelog
-* Tue Dec 17 2019 Philipp Reisner <phil@bk13-2.linbit> - 
+* Tue Dec 17 2019 Philipp Reisner <phil@bk13-2.linbit> - 0.11-1
 - Initial build.
 

@@ -1,0 +1,5 @@
+thin-send-recv (0.11-1) unstable; urgency=medium
+
+  * Initial release
+
+ -- Roland Kammerer <roland.kammerer@linbit.com>  Thu, 14 May 2020 11:08:11 +0200

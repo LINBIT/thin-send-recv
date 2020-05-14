@@ -1,0 +1,18 @@
+Source: thin-send-recv
+Section: admin
+Priority: optional
+Maintainer: DRBD dev <drbd-dev@lists.linbit.com>
+Uploaders: Philipp Reisner <philipp.reisner@linbit.com>,
+           Roland Kammerer <roland.kammerer@linbit.com>
+Build-Depends: debhelper (>= 7),
+               flex
+Standards-Version: 4.9.5
+Homepage: https://www.linbit.com
+Vcs-Browser: https://github.com/LINBIT/thin-send-recv
+Vcs-Git: https://github.com/LINBIT/thin-send-recv.git
+
+Package: thin-send-recv
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, thin-provisioning-tools
+Description: zfs send and zfs recv for the LVM thin world.
+ This utility mimics zfs send and zfs recv for the LVM thin world.

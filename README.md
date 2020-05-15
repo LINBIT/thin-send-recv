@@ -2,23 +2,23 @@
 
  # What is "thin_send & thin_recv"
 
-This is a utility that mimics zfs send and zfs recv for the LVM thin world. 
+This is a utility that mimics zfs send and zfs recv for the LVM thin world.
 
-Its developed by [Philipp Reisner](https://www.linkedin.com/in/philipp-reisner-538569104/). 
+Its developed by [Philipp Reisner](https://www.linkedin.com/in/philipp-reisner-538569104/).
 
-License is GPLv3, feel free to use & test. 
+License is GPLv3, feel free to use & test.
 
 ## How it works
 
 send / receive process can be triggered with the following command;
 
-> $ thin_send ssd_vg/CentOS7.6 ssd_vg/li0 | ssh root@target-machine thin_recv kubuntu-vg/li0
+`$ thin_send ssd_vg/CentOS7.6 ssd_vg/li0 | ssh root@target-machine thin_recv kubuntu-vg/li0`
 
 or you can you socat for streaming;
 
->target-machine$ socat TCP-LISTEN:4321 STDOUT | zstd -d | thin_recv kubuntu-vg/li0
+`target-machine$ socat TCP-LISTEN:4321 STDOUT | zstd -d | thin_recv kubuntu-vg/li0`
 
->source-machine$ thin_send ssd_vg/CentOS7.6 ssd_vg/li0 | zstd | socat STDIN TCP:10.43.8.39:4321
+`source-machine$ thin_send ssd_vg/CentOS7.6 ssd_vg/li0 | zstd | socat STDIN TCP:10.43.8.39:4321`
 
 
 ## Support
@@ -29,4 +29,4 @@ thin_send & thin_recv is an open source software. You can use the slack channel 
 
 **Free Software, Hell Yeah!**
 
-[![DRBD Powered by LINBIT](https://github.com/yusufyildiz/lstest2/blob/master/img/poweredby_linbit_small.png?raw=true)](https://www.linbit.com/linstor/) 
+[![DRBD Powered by LINBIT](https://github.com/yusufyildiz/lstest2/blob/master/img/poweredby_linbit_small.png?raw=true)](https://www.linbit.com/linstor/)

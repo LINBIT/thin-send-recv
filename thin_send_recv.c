@@ -506,19 +506,47 @@ static void send_header(int out_fd, loff_t begin, size_t length, enum cmd cmd)
 	}
 }
 
+static bool is_fifo(int fd)
+{
+	struct stat sb;
+	int err;
+
+	err = fstat(fd, &sb);
+	if (err) {
+		perror("fstat failed");
+		exit(10);
+	}
+	return S_ISFIFO(sb.st_mode);
+}
+
+static int splice_data(int in_fd, int out_fd, size_t len)
+{
+	int ret;
+
+	do {
+		ret = splice(in_fd, NULL, out_fd, NULL, len, SPLICE_F_MOVE);
+		if (ret == 0) {
+			return 0;
+		} else if (ret == -1) {
+			perror("splice");
+			exit(10);
+		}
+		len -= ret;
+	} while (len);
+
+	return 0;
+}
+
 static int copy_data(int in_fd, loff_t *in_off,
 		     int out_fd, loff_t *out_off,
 		     size_t len, size_t buffer_size)
 {
 	static size_t allocated_buffer_size = 0;
 	static void *buffer = NULL;
+	static int can_splice = -1;
 
-	if (!buffer || allocated_buffer_size < buffer_size) {
-		free(buffer);
-		buffer = aligned_alloc(sysconf(_SC_PAGESIZE), buffer_size);
-		if (!buffer)
-			return -1;
-		allocated_buffer_size = buffer_size;
+	if (can_splice == -1) {
+		can_splice = is_fifo(in_fd) || is_fifo(out_fd);
 	}
 
 	if (in_off) {
@@ -532,6 +560,18 @@ static int copy_data(int in_fd, loff_t *in_off,
 		if (r == -1)
 			return -1;
 	}
+
+	if (can_splice)
+		return splice_data(in_fd, out_fd, len);
+
+	if (!buffer || allocated_buffer_size < buffer_size) {
+		free(buffer);
+		buffer = aligned_alloc(sysconf(_SC_PAGESIZE), buffer_size);
+		if (!buffer)
+			return -1;
+		allocated_buffer_size = buffer_size;
+	}
+
 
 	do {
 		int chunk = buffer_size < len ? buffer_size : len;

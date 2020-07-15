@@ -148,7 +148,7 @@ static char *get_thin_pool_dm_path(const struct snap_info *snap)
 		fprintf(stderr, "failed to parse lvs output %d cmdline=%s\n", matches, cmdline);
 		exit(10);
 	}
-	fclose(f);
+	pclose(f);
 
 	return thin_pool_dm_path;
 }
@@ -306,7 +306,7 @@ static void get_snap_info(const char *snap_name, struct snap_info *info)
 		exit(10);
 	}
 	free(cmdline);
-	fclose(f);
+	pclose(f);
 }
 
 static void usage_exit(const struct option *long_options, const char *reason)

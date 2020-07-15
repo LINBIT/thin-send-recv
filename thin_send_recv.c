@@ -273,6 +273,7 @@ static void thin_receive(const char *snap_name, int in_fd)
 		perror("failed to open snap");
 		exit(10);
 	}
+	free(snap_file_name);
 
 	do {
 		cont = process_input(in_fd, out_fd);
@@ -304,6 +305,7 @@ static void get_snap_info(const char *snap_name, struct snap_info *info)
 		fprintf(stderr, "failed to parse lvs output %d cmdline=%s\n", matches, cmdline);
 		exit(10);
 	}
+	free(cmdline);
 	fclose(f);
 }
 
@@ -677,6 +679,7 @@ static int system_fmt(const char *fmt, ...)
 		fprintf(stderr, "cmd %s exited with %d\n", cmdline, WEXITSTATUS(ret));
 		return WEXITSTATUS(ret);
 	}
+	free(cmdline);
 
 	return 0;
 }

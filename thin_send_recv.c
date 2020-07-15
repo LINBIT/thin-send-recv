@@ -575,6 +575,24 @@ static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length, size_
 	}
 }
 
+ssize_t read_complete(int fd, void *buf, size_t count)
+{
+	ssize_t ret, sum = 0;
+
+	do {
+		ret = read(fd, buf, count);
+		if (ret == -1)
+			return ret;
+		else if (ret == 0)
+			return sum;
+		count -= ret;
+		buf += ret;
+		sum += ret;
+	} while (count);
+
+	return sum;
+}
+
 static bool process_input(int in_fd, int out_fd)
 {
 	struct chunk chunk;
@@ -583,15 +601,12 @@ static bool process_input(int in_fd, int out_fd)
 	enum cmd cmd;
 	int ret;
 
-	ret = read(in_fd, &chunk, sizeof(chunk));
+	ret = read_complete(in_fd, &chunk, sizeof(chunk));
 	if (ret == -1) {
 		perror("read failed");
 		exit(10);
 	} else if (ret == 0) {
 		return false;
-	} else if (ret != sizeof(chunk)) {
-		fprintf(stderr, "read returned %d instead of %ld\n", ret, sizeof(chunk));
-		exit(10);
 	}
 
 	if (htobe64(MAGIC_VALUE) != chunk.magic) {

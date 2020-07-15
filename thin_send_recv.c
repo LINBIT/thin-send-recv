@@ -528,9 +528,29 @@ static int splice_data(int in_fd, int out_fd, size_t len)
 		if (ret == 0) {
 			return 0;
 		} else if (ret == -1) {
-			perror("splice");
+			perror("splice(data)");
 			exit(10);
 		}
+		len -= ret;
+	} while (len);
+
+	return 0;
+}
+
+static int splice_data_with_fifo(int in_fd, int out_fd, size_t len, int pipe_fd[2])
+{
+	int ret;
+
+	do {
+		ret = splice(in_fd, NULL, pipe_fd[1], NULL, len, SPLICE_F_MOVE);
+		if (ret == 0) {
+			return 0;
+		} else if (ret == -1) {
+			perror("splice(data_with_fifo)");
+			exit(10);
+		}
+
+		splice_data(pipe_fd[0], out_fd, ret);
 		len -= ret;
 	} while (len);
 
@@ -541,12 +561,18 @@ static int copy_data(int in_fd, loff_t *in_off,
 		     int out_fd, loff_t *out_off,
 		     size_t len, size_t buffer_size)
 {
-	static size_t allocated_buffer_size = 0;
-	static void *buffer = NULL;
-	static int can_splice = -1;
+	static int one_is_fifo = -1;
+	static int pipe_fd[2];
 
-	if (can_splice == -1) {
-		can_splice = is_fifo(in_fd) || is_fifo(out_fd);
+	if (one_is_fifo == -1) {
+		one_is_fifo = is_fifo(in_fd) || is_fifo(out_fd);
+		if (!one_is_fifo) {
+			int ret = pipe(pipe_fd);
+			if (ret) {
+				perror("pipe()");
+				exit(10);
+			}
+		}
 	}
 
 	if (in_off) {
@@ -561,47 +587,10 @@ static int copy_data(int in_fd, loff_t *in_off,
 			return -1;
 	}
 
-	if (can_splice)
+	if (one_is_fifo)
 		return splice_data(in_fd, out_fd, len);
-
-	if (!buffer || allocated_buffer_size < buffer_size) {
-		free(buffer);
-		buffer = aligned_alloc(sysconf(_SC_PAGESIZE), buffer_size);
-		if (!buffer)
-			return -1;
-		allocated_buffer_size = buffer_size;
-	}
-
-
-	do {
-		int chunk = buffer_size < len ? buffer_size : len;
-		int ret, chu;
-		void *buf;
-
-		chu = chunk;
-		buf = buffer;
-		do {
-			ret = read(in_fd, buf, chu);
-			if (ret == -1 || ret == 0)
-				return ret;
-			chu -= ret;
-			buf += ret;
-		} while (chu);
-
-		chu = chunk;
-		buf = buffer;
-		do {
-			ret = write(out_fd, buf, chu);
-			if (ret == -1)
-				return -1;
-			chu -= ret;
-			buf += ret;
-		} while (chu);
-
-		len -= chunk;
-	} while (len);
-
-	return 0;
+	else
+		return splice_data_with_fifo(in_fd, out_fd, len, pipe_fd);
 }
 
 static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length, size_t block_size)

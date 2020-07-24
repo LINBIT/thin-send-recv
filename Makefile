@@ -1,4 +1,4 @@
-all-src = Makefile README thin_delta_scanner.fl thin_delta_scanner.h thin_send_recv.c thin_send_recv.spec
+all-src = Makefile README.md thin_delta_scanner.fl thin_delta_scanner.h thin_send_recv.c thin_send_recv.spec
 VERSION = $(shell sed -ne '/^Version:/{s/Version: \(.*\)/\1/;p;q;}' thin_send_recv.spec)
 all-obj = thin_send_recv.o thin_delta_scanner.o
 CFLAGS = -o2 -Wall -DVERSION=\"$(VERSION)\" $(EXTRA_CFLAGS)

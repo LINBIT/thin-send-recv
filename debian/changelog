@@ -1,3 +1,9 @@
+thin-send-recv (0.22-1) unstable; urgency=medium
+
+  * Splice always
+
+ -- Philipp Reisner <philipp.reisner@linbit.com>  Fri, 24 July 2020 18:40:12 +0200
+
 thin-send-recv (0.11-1) unstable; urgency=medium
 
   * Initial release

@@ -1,5 +1,5 @@
 Name: thin-send-recv
-Version: 0.11
+Version: 0.22
 Release: 1
 Summary: send and receive for LVM thin volumes
 License: GPLv3+
@@ -40,6 +40,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_bindir}/*
 
 %changelog
+* Fri Jul 24 2020 Philipp Reisner <phil@bk13-2.linbit> - 0.22-1
+- Splice always.
+
 * Tue Dec 17 2019 Philipp Reisner <phil@bk13-2.linbit> - 0.11-1
 - Initial build.
 

@@ -13,6 +13,10 @@
 #include <string.h>
 #include "thin_delta_scanner.h"
 
+#ifndef FALLOC_FL_PUNCH_HOLE
+#define FALLOC_FL_PUNCH_HOLE     0x02 /* de-allocates range */
+#endif
+
 struct snap_info {
 	char *vg_name;
 	char *lv_name;

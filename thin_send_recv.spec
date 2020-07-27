@@ -9,8 +9,8 @@ Requires: /usr/sbin/thin_dump
 Requires: /usr/sbin/thin_delta
 Requires: /bin/sh
 
-Source0: %{name}-%{version}-%{release}.tar.gz
-BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
+Source0: %{name}-%{version}.tar.gz
+BuildRoot: %{_tmppath}/%{name}-%{version}-root
 BuildRequires: flex make gcc
 
 %description
@@ -22,7 +22,7 @@ Thins_send can also create a stream that contains only the blocks modified
 by a snapshot or between two snapshots.
 
 %prep
-%setup -q -n %{name}-%{version}-%{release}
+%setup -q -n %{name}-%{version}
 
 %build
 make EXTRA_CFLAGS=-g
@@ -36,13 +36,13 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(-,root,root,-)
-%doc README
+%doc README.md
 %{_bindir}/*
 
 %changelog
-* Fri Jul 24 2020 Philipp Reisner <phil@bk13-2.linbit> - 0.22-1
+* Fri Jul 24 2020 Philipp Reisner <philipp.reisner@linbit.com> - 0.22-1
 - Splice always.
 
-* Tue Dec 17 2019 Philipp Reisner <phil@bk13-2.linbit> - 0.11-1
+* Tue Dec 17 2019 Philipp Reisner <philipp.reisner@linbit.com> - 0.11-1
 - Initial build.
 

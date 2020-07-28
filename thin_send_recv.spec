@@ -3,6 +3,7 @@ Version: 0.22
 Release: 1
 Summary: send and receive for LVM thin volumes
 License: GPLv3+
+Group: Applications/System
 
 Requires: /usr/sbin/lvs
 Requires: /usr/sbin/thin_dump

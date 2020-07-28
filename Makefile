@@ -3,6 +3,9 @@ VERSION = $(shell sed -ne '/^Version:/{s/Version: \(.*\)/\1/;p;q;}' thin_send_re
 all-obj = thin_send_recv.o thin_delta_scanner.o
 CFLAGS = -o2 -Wall -DVERSION=\"$(VERSION)\" $(EXTRA_CFLAGS)
 
+# globs are messy, would need dh_clean, better name the ones we need
+DEBFILES = rules copyright source/format changelog compat control
+
 all:	thin_send thin_recv
 
 thin_send thin_recv: thin_send_recv
@@ -22,7 +25,12 @@ install: thin_send_recv
 
 tgz: $(all-src)
 	tar --transform="flags=rSh;s,^,thin-send-recv-$(VERSION)/," \
-		--owner=0 --group=0 -czf - $(all-src) > thin-send-recv-$(VERSION).tar.gz
+		--owner=0 --group=0 -czf - $(all-src) \
+		$(if $(PRESERVE_DEBIAN), $(addprefix debian/, $(DEBFILES)),) \
+		> thin-send-recv-$(VERSION).tar.gz
+
+debrelease:
+	make tgz PRESERVE_DEBIAN=1
 
 clean:
 	rm -rf $(all-obj) thin_delta_scanner.c *~ thin_send_recv thin_send thin_recv

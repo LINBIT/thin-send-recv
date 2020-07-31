@@ -29,6 +29,8 @@ tgz: $(all-src)
 		$(if $(PRESERVE_DEBIAN), $(addprefix debian/, $(DEBFILES)),) \
 		> thin-send-recv-$(VERSION).tar.gz
 
+release: tgz
+
 debrelease:
 	make tgz PRESERVE_DEBIAN=1
 

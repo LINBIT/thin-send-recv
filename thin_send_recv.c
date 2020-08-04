@@ -272,7 +272,7 @@ static void thin_receive(const char *snap_name, int in_fd)
 	get_snap_info(snap_name, &snap);
 
 	checked_asprintf(&snap_file_name, "/dev/%s/%s", snap.vg_name, snap.lv_name);
-	out_fd = open(snap_file_name, O_WRONLY | O_DIRECT | O_CLOEXEC);
+	out_fd = open(snap_file_name, O_WRONLY | O_CLOEXEC);
 	if (out_fd == -1) {
 		perror("failed to open snap");
 		exit(10);

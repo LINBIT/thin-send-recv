@@ -536,6 +536,7 @@ static int splice_data(int in_fd, int out_fd, size_t len)
 			exit(10);
 		}
 		len -= ret;
+		posix_fadvise(out_fd, 0, 0, POSIX_FADV_DONTNEED);
 	} while (len);
 
 	return 0;

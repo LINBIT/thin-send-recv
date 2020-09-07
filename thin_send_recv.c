@@ -37,6 +37,9 @@ enum cmd {
 	CMD_UNMAP,
 };
 
+/* Default program name */
+static const char *PGM_NAME = "thin-send-recv";
+
 static const uint64_t MAGIC_VALUE = 0xe85bc5636cc72a05;
 
 static void parse_diff(int in_fd, int out_fd);
@@ -54,6 +57,9 @@ static bool process_input(int in_fd, int out_fd);
 
 int main(int argc, char **argv)
 {
+	if (argc >= 1)
+		/* Set the program name to whatever was used to call the program */
+		PGM_NAME = argv[0];
 	static struct option long_options[] = {
 		{"version",   no_argument, 0, 'v' },
 		{"send",      no_argument, 0, 's' },

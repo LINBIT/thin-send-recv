@@ -2,6 +2,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/sendfile.h>
+#include <sys/file.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -11,6 +12,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
+#include <errno.h>
 #include "thin_delta_scanner.h"
 
 #ifndef FALLOC_FL_PUNCH_HOLE
@@ -40,6 +42,9 @@ enum cmd {
 /* Default program name */
 static const char *PGM_NAME = "thin-send-recv";
 
+/* Path for the program's lock file */
+static const char *const LOCKFILE_PATH = "/var/run/thin-send-recv.lock";
+
 static const uint64_t MAGIC_VALUE = 0xe85bc5636cc72a05;
 
 static void parse_diff(int in_fd, int out_fd);
@@ -54,6 +59,8 @@ static void thin_send_vol(const char *vol_name, int out_fd);
 static void thin_send_diff(const char *snap1_name, const char *snap2_name, int out_fd);
 static void thin_receive(const char *snap_name, int in_fd);
 static bool process_input(int in_fd, int out_fd);
+static int lockfile_lock(void);
+static void lockfile_unlock(int lockfile_fd);
 
 int main(int argc, char **argv)
 {
@@ -181,10 +188,14 @@ static void thin_send_diff(const char *snap1_name, const char *snap2_name, int o
 	fcntl(tmp_fd, F_SETFD, FD_CLOEXEC);
 
 	thin_pool_dm_path = get_thin_pool_dm_path(&snap2);
+	const int lockfile_fd = lockfile_lock();
+	if (lockfile_fd == -1)
+		exit(10);
 	err = system_fmt("dmsetup message %s-tpool 0 reserve_metadata_snap",
 			 thin_pool_dm_path);
 	if (err) {
 		unlink(tmp_file_name);
+		lockfile_unlock(lockfile_fd);
 		exit(10);
 	}
 
@@ -195,6 +206,7 @@ static void thin_send_diff(const char *snap1_name, const char *snap2_name, int o
 
 	system_fmt("dmsetup message %s-tpool 0 release_metadata_snap",
 		   thin_pool_dm_path);
+	lockfile_unlock(lockfile_fd);
 
 	if (err)
 		exit(10);
@@ -234,10 +246,14 @@ static void thin_send_vol(const char *vol_name, int out_fd)
 	fcntl(tmp_fd, F_SETFD, FD_CLOEXEC);
 
 	thin_pool_dm_path = get_thin_pool_dm_path(&vol);
+	const int lockfile_fd = lockfile_lock();
+	if (lockfile_fd == -1)
+		exit(10);
 	err = system_fmt("dmsetup message %s-tpool 0 reserve_metadata_snap",
 			 thin_pool_dm_path);
 	if (err) {
 		unlink(tmp_file_name);
+		lockfile_unlock(lockfile_fd);
 		exit(10);
 	}
 
@@ -247,6 +263,7 @@ static void thin_send_vol(const char *vol_name, int out_fd)
 
 	system_fmt("dmsetup message %s-tpool 0 release_metadata_snap",
 		   thin_pool_dm_path);
+	lockfile_unlock(lockfile_fd);
 	if (err)
 		exit(10);
 
@@ -723,3 +740,34 @@ static int system_fmt(const char *fmt, ...)
 
 	return 0;
 }
+
+static int lockfile_lock(void)
+{
+	int lockfile_fd = open(LOCKFILE_PATH, O_CREAT | O_RDONLY);
+	if (lockfile_fd != -1) {
+		const int lock_rc = flock(lockfile_fd, LOCK_EX);
+		if (lock_rc != 0) {
+			const char* const error_msg = strerror(errno);
+			fprintf(stderr, "%s: Cannot obtain a lock on lock file %s\n",
+			        PGM_NAME, LOCKFILE_PATH);
+			fprintf(stderr, "    Error: %s\n", error_msg);
+			close(lockfile_fd);
+			lockfile_fd = -1;
+		}
+	} else {
+		const char* const error_msg = strerror(errno);
+		fprintf(stderr, "%s: Cannot open lock file %s\n",
+		        PGM_NAME, LOCKFILE_PATH);
+		fprintf(stderr, "    Error: %s\n", error_msg);
+	}
+	return lockfile_fd;
+}
+
+static void lockfile_unlock(const int lockfile_fd)
+{
+	if (lockfile_fd != -1) {
+		flock(lockfile_fd, LOCK_UN);
+		close(lockfile_fd);
+	}
+}
+

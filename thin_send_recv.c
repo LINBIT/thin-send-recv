@@ -25,6 +25,7 @@ struct snap_info {
 	char *thin_pool_name;
 	char *dm_path;
 	int thin_id;
+	bool active;
 };
 
 struct chunk {
@@ -217,9 +218,12 @@ static void thin_send_diff(const char *snap1_name, const char *snap2_name, int o
 		exit(10);
 	}
 
+	if (!snap2.active)
+		system_fmt("lvchange --ignoreactivationskip --activate y %s", snap2_name);
+
 	snap2_fd = open(snap2.dm_path, O_RDONLY | O_DIRECT | O_CLOEXEC);
 	if (snap2_fd == -1) {
-		perror("failed to open snap2");
+		fprintf(stderr, "failed to open %s with %d %s\n", snap2.dm_path, errno, strerror(errno));
 		exit(10);
 	}
 
@@ -227,6 +231,9 @@ static void thin_send_diff(const char *snap1_name, const char *snap2_name, int o
 
 	fclose(yyin);
 	close(snap2_fd);
+
+	if (!snap2.active)
+		system_fmt("lvchange --activate n %s", snap2_name);
 }
 
 static void thin_send_vol(const char *vol_name, int out_fd)
@@ -312,27 +319,32 @@ static void thin_receive(const char *snap_name, int in_fd)
 static void get_snap_info(const char *snap_name, struct snap_info *info)
 {
 	char *cmdline;
+	char *attr;
 	int matches;
 	FILE *f;
 
-	checked_asprintf(&cmdline, "lvs --noheadings -o vg_name,lv_name,pool_lv,lv_dm_path,thin_id %s", snap_name);
+	checked_asprintf(&cmdline, "lvs --noheadings -o vg_name,lv_name,pool_lv,lv_dm_path,thin_id,attr %s", snap_name);
 	f = popen(cmdline, "r");
 	if (!f) {
 		perror("popen failed");
 		exit(10);
 	}
 
-	matches = fscanf(f, " %ms %ms %ms %ms %d",
+	matches = fscanf(f, " %ms %ms %ms %ms %d %ms",
 			 &info->vg_name,
 			 &info->lv_name,
 			 &info->thin_pool_name,
 			 &info->dm_path,
-			 &info->thin_id);
-	if (matches != 5) {
+			 &info->thin_id,
+			 &attr);
+	if (matches != 6 && strlen(attr) < 5) {
 		fprintf(stderr, "failed to parse lvs output %d cmdline=%s\n", matches, cmdline);
 		exit(10);
 	}
+	info->active = attr[4] == 'a';
+
 	free(cmdline);
+	free(attr);
 	pclose(f);
 }
 

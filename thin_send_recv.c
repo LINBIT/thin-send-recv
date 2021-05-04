@@ -607,7 +607,7 @@ static int copy_data(int in_fd, loff_t *in_off,
 	if (one_is_fifo == -1) {
 		one_is_fifo = is_fifo(in_fd) || is_fifo(out_fd);
 		if (!one_is_fifo) {
-			int ret = pipe(pipe_fd);
+			int ret = pipe2(pipe_fd, O_CLOEXEC);
 			if (ret) {
 				perror("pipe()");
 				exit(10);

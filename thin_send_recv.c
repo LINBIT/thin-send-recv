@@ -62,6 +62,8 @@ static void thin_receive(const char *snap_name, int in_fd);
 static bool process_input(int in_fd, int out_fd);
 static int lockfile_lock(void);
 static void lockfile_unlock(int lockfile_fd);
+static int reserve_metadata_snap(const char *thin_pool_dm_path);
+static void release_metadata_snap(const char *thin_pool_dm_path);
 
 int main(int argc, char **argv)
 {
@@ -192,8 +194,7 @@ static void thin_send_diff(const char *snap1_name, const char *snap2_name, int o
 	const int lockfile_fd = lockfile_lock();
 	if (lockfile_fd == -1)
 		exit(10);
-	err = system_fmt("dmsetup message %s-tpool 0 reserve_metadata_snap",
-			 thin_pool_dm_path);
+	err = reserve_metadata_snap(thin_pool_dm_path);
 	if (err) {
 		unlink(tmp_file_name);
 		lockfile_unlock(lockfile_fd);
@@ -205,8 +206,7 @@ static void thin_send_diff(const char *snap1_name, const char *snap2_name, int o
 			 tmp_file_name);
 	unlink(tmp_file_name);
 
-	system_fmt("dmsetup message %s-tpool 0 release_metadata_snap",
-		   thin_pool_dm_path);
+	release_metadata_snap(thin_pool_dm_path);
 	lockfile_unlock(lockfile_fd);
 
 	if (err)
@@ -256,8 +256,7 @@ static void thin_send_vol(const char *vol_name, int out_fd)
 	const int lockfile_fd = lockfile_lock();
 	if (lockfile_fd == -1)
 		exit(10);
-	err = system_fmt("dmsetup message %s-tpool 0 reserve_metadata_snap",
-			 thin_pool_dm_path);
+	err = reserve_metadata_snap(thin_pool_dm_path);
 	if (err) {
 		unlink(tmp_file_name);
 		lockfile_unlock(lockfile_fd);
@@ -268,8 +267,7 @@ static void thin_send_vol(const char *vol_name, int out_fd)
 			 vol.thin_id, thin_pool_dm_path, tmp_file_name);
 	unlink(tmp_file_name);
 
-	system_fmt("dmsetup message %s-tpool 0 release_metadata_snap",
-		   thin_pool_dm_path);
+	release_metadata_snap(thin_pool_dm_path);
 	lockfile_unlock(lockfile_fd);
 	if (err)
 		exit(10);
@@ -783,3 +781,15 @@ static void lockfile_unlock(const int lockfile_fd)
 	}
 }
 
+static int reserve_metadata_snap(const char *thin_pool_dm_path)
+{
+	int err = system_fmt("dmsetup message %s-tpool 0 reserve_metadata_snap",
+			     thin_pool_dm_path);
+	return err;
+}
+
+static void release_metadata_snap(const char *thin_pool_dm_path)
+{
+	system_fmt("dmsetup message %s-tpool 0 release_metadata_snap",
+		   thin_pool_dm_path);
+}

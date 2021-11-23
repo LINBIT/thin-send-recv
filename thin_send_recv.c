@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <errno.h>
+#include <signal.h>
 #include "thin_delta_scanner.h"
 
 #ifndef FALLOC_FL_PUNCH_HOLE
@@ -40,13 +41,14 @@ enum cmd {
 	CMD_UNMAP,
 };
 
-/* Default program name */
 static const char *PGM_NAME = "thin-send-recv";
-
-/* Path for the program's lock file */
 static const char *const LOCKFILE_PATH = "/var/run/thin-send-recv.lock";
-
 static const uint64_t MAGIC_VALUE = 0xe85bc5636cc72a05;
+static const uint32_t CATCH_SIGNALS = 1 << SIGABRT | 1 << SIGALRM |
+	1 << SIGBUS | 1 << SIGFPE | 1 << SIGHUP | 1 << SIGINT |
+	1 << SIGPIPE | 1 << SIGPWR | 1 << SIGQUIT | 1 << SIGSEGV |
+	1 << SIGTERM | 1 << SIGUSR1 | 1 << SIGUSR2 | 1 << SIGXCPU |
+	1 << SIGXFSZ;
 
 static void parse_diff(int in_fd, int out_fd);
 static void parse_dump(int in_fd, int out_fd);
@@ -64,6 +66,8 @@ static int lockfile_lock(void);
 static void lockfile_unlock(int lockfile_fd);
 static int reserve_metadata_snap(const char *thin_pool_dm_path);
 static void release_metadata_snap(const char *thin_pool_dm_path);
+
+static const char *data_for_signal_handler;
 
 int main(int argc, char **argv)
 {
@@ -781,10 +785,54 @@ static void lockfile_unlock(const int lockfile_fd)
 	}
 }
 
+static void release_metadata_upon_signal(int signal)
+{
+	char *tpool;
+
+	fprintf(stderr, "%s: Terminated by signal %s %d, relasing metadata-snap\n",
+		PGM_NAME, strsignal(signal), signal);
+
+	asprintf(&tpool, "%s-tpool", data_for_signal_handler);
+	execlp("dmsetup", "dmsetup", "message", tpool, "0", "release_metadata_snap", NULL);
+	/* if execlp returned there was an error, errno should be set here. */
+	fprintf(stderr, "%s: execlp() returned %d %s\n", PGM_NAME, errno, strerror(errno));
+	_exit(10);
+}
+
+static void set_signals(void (*handler)(int))
+{
+	struct sigaction action	= {
+		.sa_handler = handler,
+	};
+	int signum, err, f;
+	int signums_to_set = CATCH_SIGNALS;
+
+	sigemptyset(&action.sa_mask);
+
+	while ((f = ffs(signums_to_set))) {
+		signum = f - 1;
+		signums_to_set &= ~(1U << signum);
+		err = sigaction(signum, &action, NULL);
+		if (err)
+			fprintf(stderr, "sigaction(%s) returned %d %s\n",
+				strsignal(signum), errno, strerror(errno));
+	}
+}
+
 static int reserve_metadata_snap(const char *thin_pool_dm_path)
 {
-	int err = system_fmt("dmsetup message %s-tpool 0 reserve_metadata_snap",
-			     thin_pool_dm_path);
+	int err;
+
+	data_for_signal_handler = thin_pool_dm_path;
+	set_signals(&release_metadata_upon_signal);
+	err = system_fmt("dmsetup message %s-tpool 0 reserve_metadata_snap",
+			 thin_pool_dm_path);
+	if (err)
+		fprintf(stderr, "LVM metadata_snap is reserved. You can free it by running:\n\n"
+			"dmsetup message %s-tpool 0 release_metadata_snap\n\n"
+			"Only do that if nothing else is using it.\n",
+			thin_pool_dm_path);
+
 	return err;
 }
 
@@ -792,4 +840,6 @@ static void release_metadata_snap(const char *thin_pool_dm_path)
 {
 	system_fmt("dmsetup message %s-tpool 0 release_metadata_snap",
 		   thin_pool_dm_path);
+	set_signals(SIG_DFL);
+	data_for_signal_handler = NULL;
 }

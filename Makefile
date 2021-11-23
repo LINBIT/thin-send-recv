@@ -36,3 +36,6 @@ debrelease:
 
 clean:
 	rm -rf $(all-obj) thin_delta_scanner.c *~ thin_send_recv thin_send thin_recv
+
+test: all
+	./run_tests.sh

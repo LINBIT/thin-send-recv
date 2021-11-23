@@ -1,3 +1,11 @@
+thin-send-recv (1.0-1) unstable; urgency=medium
+
+  * Handle snapshots that are not activated
+  * Handle signals while holding the metadata_snap
+  * Added tests for full-volume-copy, diff-mode and signal handling
+
+ -- Philipp Reisner <philipp.reisner@linbit.com>  Tue, 23 Nov 2021 11:28:54 +0200
+
 thin-send-recv (0.24-1) unstable; urgency=medium
 
   * Workaround for external LVM commands race condition

@@ -339,7 +339,7 @@ static void get_snap_info(const char *snap_name, struct snap_info *info)
 			 &info->dm_path,
 			 &info->thin_id,
 			 &attr);
-	if (matches != 6 && strlen(attr) < 5) {
+	if (matches != 6 || strlen(attr) < 5) {
 		fprintf(stderr, "failed to parse lvs output %d cmdline=%s\n", matches, cmdline);
 		exit(10);
 	}

@@ -78,9 +78,14 @@ static bool unsupported_unmap_is_fatal = false;
 
 int main(int argc, char **argv)
 {
-	if (argc >= 1)
-		/* Set the program name to whatever was used to call the program */
-		PGM_NAME = argv[0];
+	if (argv == NULL || argc < 1) {
+		fputs("thin_send_recv: Nonexistent or empty arguments array, aborting.\n", stderr);
+		abort();
+	}
+
+	/* Set the program name to whatever was used to call the program */
+	PGM_NAME = argv[0];
+
 	static struct option long_options[] = {
 		{"version",   no_argument, 0, 'v' },
 		{"send",      no_argument, 0, 's' },

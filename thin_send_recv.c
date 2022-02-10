@@ -566,7 +566,7 @@ static bool is_fifo(int fd)
 
 static int splice_data(int in_fd, int out_fd, size_t len)
 {
-	int ret;
+	ssize_t ret;
 
 	do {
 		ret = splice(in_fd, NULL, out_fd, NULL, len, SPLICE_F_MOVE);
@@ -585,7 +585,7 @@ static int splice_data(int in_fd, int out_fd, size_t len)
 
 static int splice_data_with_fifo(int in_fd, int out_fd, size_t len, int pipe_fd[2])
 {
-	int ret;
+	ssize_t ret;
 
 	do {
 		ret = splice(in_fd, NULL, pipe_fd[1], NULL, len, SPLICE_F_MOVE);

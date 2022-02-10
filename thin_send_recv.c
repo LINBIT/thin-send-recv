@@ -529,22 +529,26 @@ break_loop:
 
 static void send_header(int out_fd, loff_t begin, size_t length, enum cmd cmd)
 {
-	int ret;
+	size_t write_offset;
 	struct chunk chunk = {
 		.magic = htobe64(MAGIC_VALUE),
 		.offset = htobe64(begin),
 		.length = htobe32(length),
 		.cmd = htobe32(cmd),
 	};
+	const char *const chunk_data = (const char *) &chunk;
 
-	ret = write(out_fd, &chunk, sizeof(chunk));
-	if (ret == -1) {
-		perror("write failed");
-		exit(10);
-	} else if (ret != sizeof(chunk)) {
-		fprintf(stderr, "write returned %d instead of %ld\n", ret, sizeof(chunk));
-		exit(10);
-	}
+
+	write_offset = 0;
+	do {
+		const ssize_t write_rc = write(out_fd, &chunk_data[write_offset], sizeof (chunk) - write_offset);
+		if (write_rc > 0) {
+			write_offset += write_rc;
+		} else if (!(write_rc == -1 && errno == EINTR)) {
+			perror("write failed");
+			exit(10);
+		}
+	} while (write_offset < sizeof (chunk));
 }
 
 static bool is_fifo(int fd)

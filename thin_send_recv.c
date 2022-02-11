@@ -32,7 +32,7 @@ struct snap_info {
 struct chunk {
 	uint64_t magic;
 	uint64_t offset;
-	uint32_t length;
+	uint64_t length;
 	uint32_t cmd;
 } __attribute__((packed));
 
@@ -533,7 +533,7 @@ static void send_header(int out_fd, loff_t begin, size_t length, enum cmd cmd)
 	struct chunk chunk = {
 		.magic = htobe64(MAGIC_VALUE),
 		.offset = htobe64(begin),
-		.length = htobe32(length),
+		.length = htobe64(length),
 		.cmd = htobe32(cmd),
 	};
 	const char *const chunk_data = (const char *) &chunk;
@@ -705,7 +705,7 @@ static bool process_input(int in_fd, int out_fd)
 	}
 
 	offset = be64toh(chunk.offset);
-	length = be32toh(chunk.length);
+	length = be64toh(chunk.length);
 	cmd = be32toh(chunk.cmd);
 
 	switch (cmd) {

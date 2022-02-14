@@ -648,22 +648,35 @@ static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length, size_
 	}
 }
 
-ssize_t read_complete(int fd, void *buf, size_t count)
+ssize_t read_complete(const int fd, void *const buf, const size_t requested_count)
 {
-	ssize_t ret, sum = 0;
+	char *const read_buf = buf;
+	ssize_t completed_count = 0;
 
-	do {
-		ret = read(fd, buf, count);
-		if (ret == -1)
-			return ret;
-		else if (ret == 0)
-			return sum;
-		count -= ret;
-		buf += ret;
-		sum += ret;
-	} while (count);
+	while (completed_count < (ssize_t) requested_count) {
+		void *const read_ptr = &read_buf[completed_count];
+		const ssize_t read_bytes = read(fd, read_ptr, requested_count - completed_count);
+		if (read_bytes > 0) {
+			completed_count += read_bytes;
+		} else if (read_bytes < 0) {
+			/* No-op if EINTR, otherwise read error */
+			if (errno != EINTR) {
+				completed_count = -1;
+				break;
+			}
+		} else {
+			/* read_bytes == 0, end of file */
+			if (completed_count != 0) {
+				/* Partially read buffer, error */
+				completed_count = -1;
+			}
+			/* else clean end of file, nothing was read, completed_count == 0 */
+			break;
+		}
+		/* else interrupted read, retry */
+	}
 
-	return sum;
+	return completed_count;
 }
 
 static bool process_input(int in_fd, int out_fd)

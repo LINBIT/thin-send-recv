@@ -43,6 +43,7 @@ enum cmd {
 
 static const char *PGM_NAME = "thin-send-recv";
 static const char *const LOCKFILE_PATH = "/var/run/thin-send-recv.lock";
+static const uint64_t OLD_MAGIC_VALUES[] = {0xE85BC5636CC72A05ULL, 0};
 static const uint64_t MAGIC_VALUE = 0xCA7F00D5DE7EC7ED;
 static const uint32_t CATCH_SIGNALS = 1 << SIGABRT | 1 << SIGALRM |
 	1 << SIGBUS | 1 << SIGFPE | 1 << SIGHUP | 1 << SIGINT |
@@ -686,6 +687,7 @@ ssize_t read_complete(const int fd, void *const buf, const size_t requested_coun
 static bool process_input(int in_fd, int out_fd)
 {
 	struct chunk chunk;
+	uint64_t recv_magic_value;
 	off_t offset;
 	size_t length;
 	enum cmd cmd;
@@ -699,8 +701,33 @@ static bool process_input(int in_fd, int out_fd)
 		return false;
 	}
 
-	if (htobe64(MAGIC_VALUE) != chunk.magic) {
-		fprintf(stderr, "Magic value missmatch!\n");
+	recv_magic_value = be64toh(chunk.magic);
+	if (MAGIC_VALUE != recv_magic_value) {
+		size_t magic_idx;
+		bool is_old_magic;
+
+		is_old_magic = false;
+		for (magic_idx = 0;
+		     magic_idx < ~((size_t) 0) &&
+		     OLD_MAGIC_VALUES[magic_idx] != 0;
+		     ++magic_idx) {
+			if (OLD_MAGIC_VALUES[magic_idx] == recv_magic_value) {
+				is_old_magic = true;
+				break;
+			}
+		}
+		if (is_old_magic) {
+			fputs("Received data contains the magic value of a previous version of this program.\n"
+			      "Make sure that the version of this program that is used on the sending side matches\n"
+			      "the version of this program used on the receiving side.\n",
+			      stderr);
+		} else {
+			fprintf(
+				stderr,
+				"Magic value mismatch, encountered unknown value 0x%llX\n",
+				(unsigned long long) recv_magic_value
+			);
+		}
 		exit(10);
 	}
 

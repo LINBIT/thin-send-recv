@@ -43,7 +43,7 @@ enum cmd {
 
 static const char *PGM_NAME = "thin-send-recv";
 static const char *const LOCKFILE_PATH = "/var/run/thin-send-recv.lock";
-static const uint64_t MAGIC_VALUE = 0xe85bc5636cc72a05;
+static const uint64_t MAGIC_VALUE = 0xCA7F00D5DE7EC7ED;
 static const uint32_t CATCH_SIGNALS = 1 << SIGABRT | 1 << SIGALRM |
 	1 << SIGBUS | 1 << SIGFPE | 1 << SIGHUP | 1 << SIGINT |
 	1 << SIGPIPE | 1 << SIGPWR | 1 << SIGQUIT | 1 << SIGSEGV |

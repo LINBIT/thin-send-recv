@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 #include <sys/sendfile.h>
 #include <sys/file.h>
+#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -14,6 +15,9 @@
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
+
+#include <linux/fs.h> /* ioctl BLKDISCARD */
+
 #include "thin_delta_scanner.h"
 
 #ifndef FALLOC_FL_PUNCH_HOLE
@@ -69,6 +73,8 @@ static int reserve_metadata_snap(const char *thin_pool_dm_path);
 static void release_metadata_snap(const char *thin_pool_dm_path);
 
 static const char *data_for_signal_handler;
+
+static bool unsupported_unmap_is_fatal = false;
 
 int main(int argc, char **argv)
 {
@@ -684,6 +690,49 @@ ssize_t read_complete(const int fd, void *const buf, const size_t requested_coun
 	return completed_count;
 }
 
+static void cmd_unmap(int out_fd, off_t byte_offset, size_t byte_length)
+{
+	/* For huge devices, and if device-mapper passes this down to the backend,
+	 * this may be large, and take some time.
+	 * Do it in "chunks" per call so this can show progress
+	 * and can be interrupted, if necessary. */
+	const size_t bytes_per_iteration = 1024*1024*1024;
+
+	size_t bytes_left = byte_length;
+	off_t offset = byte_offset;
+	size_t chunk;
+	uint64_t range[2];
+	int ret;
+
+	/* TODO
+	 * maybe properly align start and end of ioctl ranges,
+	 * and explicitly pwrite zero-out unaligned leading/trailing partial "extents".
+	 * In case thin allocation chunk size does not match between sender and receiver.
+	 */
+
+	while (bytes_left > 0) {
+		chunk = bytes_per_iteration < bytes_left ? bytes_per_iteration : bytes_left;
+		range[0] = offset;
+		range[1] = chunk; /* len */
+
+		ret = ioctl(out_fd, BLKDISCARD, &range);
+
+		if (ret == -1) {
+			bool ignore =
+				errno == EOPNOTSUPP &&
+				unsupported_unmap_is_fatal == false;
+
+			fprintf(stderr, "unmap(,%zd,%zu) failed: %s%s\n",
+				byte_offset, byte_length, strerror(errno),
+				ignore ? "" : " -- ignored\n");
+			if (!ignore)
+				exit(10);
+		}
+		offset += chunk;
+		bytes_left -= chunk;
+	}
+}
+
 static bool process_input(int in_fd, int out_fd)
 {
 	struct chunk chunk;
@@ -745,11 +794,18 @@ static bool process_input(int in_fd, int out_fd)
 		break;
 
 	case CMD_UNMAP:
-		ret = fallocate(out_fd, FALLOC_FL_PUNCH_HOLE, offset, length);
+		/* we'd like to "punch hole".
+		 * But the VFS layer will not allow us to use FALLOC_FL_NO_HIDE_STALE.
+		 * And without that, this translates to blockdev_issue_zeroout,
+		 * but the block layer rejects "efficient zeroout", because
+		 * device mapper thin does not implement it.
+		ret = fallocate(out_fd, FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE|FALLOC_FL_NO_HIDE_STALE, offset, length);
 		if (ret == -1) {
 			perror("fallocate(, FALLOC_FL_PUNCH_HOLE,) failed");
 			exit(10);
 		}
+		 */
+		cmd_unmap(out_fd, offset, length);
 		break;
 	}
 

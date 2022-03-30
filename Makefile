@@ -1,4 +1,5 @@
 all-src = Makefile README.md thin_delta_scanner.fl thin_delta_scanner.h thin_send_recv.c thin_send_recv.spec
+all-src += run_tests.sh $(addprefix tests/,00-volume-copy.sh 01-volume-diff.sh 02-volume-diff-with-discards.sh 03-sig-while-metadata-locked.sh)
 VERSION = $(shell sed -ne '/^Version:/{s/Version: \(.*\)/\1/;p;q;}' thin_send_recv.spec)
 all-obj = thin_send_recv.o thin_delta_scanner.o
 CFLAGS = -o2 -Wall -DVERSION=\"$(VERSION)\" $(EXTRA_CFLAGS)
@@ -37,5 +38,6 @@ debrelease:
 clean:
 	rm -rf $(all-obj) thin_delta_scanner.c *~ thin_send_recv thin_send thin_recv
 
-test: all
+# test target is used by packaging tools, but this needs a VG, so keep it out and use tests as target name
+tests: all
 	./run_tests.sh

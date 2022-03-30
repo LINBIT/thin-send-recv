@@ -1,0 +1,29 @@
+[[steps]]
+[steps.rsync]
+source = "../"
+dest = "/src"
+
+[[steps]]
+[steps.shell]
+script = """
+set -ex
+
+if command -v apt-get
+then
+    apt-get update
+    apt-get install -y make gcc gdb flex lvm2 thin-provisioning-tools
+elif command -v dnf
+then
+    dnf install -y flex lvm2 make gcc gdb
+elif command -v yum
+then
+    yum install -y flex lvm2 make gcc gdb
+else
+    echo Unknown host system >&2
+    exit 1
+fi
+
+cd /src
+make clean
+make
+"""

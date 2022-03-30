@@ -1,0 +1,53 @@
+variables:
+  TEST_BASES: alma-8 centos-7 ubuntu-bionic ubuntu-focal
+  VIRTER_VERSION: v0.18.1
+  VMSHED_VERSION: v0.15.0
+  BUILD_HELPERS_VERSION: dfbf85c26dd39ad1a88807b01fda1dc1d536abbb
+
+workflow:
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+    - if: $CI_COMMIT_BRANCH == 'master'
+    - if: $CI_COMMIT_TAG
+
+stages:
+  - prepare
+  - test
+
+prepare-bins:
+  image:
+    name: ${LINBIT_DOCKER_REGISTRY}/build-helpers:${BUILD_HELPERS_VERSION}
+  stage: prepare
+  script:
+    - . /usr/local/bin/gitlab-utils.sh
+    - ci_prepare_tools
+    - ci_fetch_binary virter virter-$VIRTER_VERSION https://github.com/LINBIT/virter/releases/download/$VIRTER_VERSION/virter-linux-amd64
+    - ci_fetch_binary vmshed vmshed-$VMSHED_VERSION https://github.com/LINBIT/vmshed/releases/download/$VMSHED_VERSION/vmshed-linux-amd64
+  cache:
+    key: bin-$VIRTER_VERSION-$VMSHED_VERSION
+    paths:
+      - download
+  artifacts:
+    paths:
+      - download
+      - bin
+
+test:
+  tags:
+    - libvirt
+  stage: test
+  script:
+    - set -ex
+    - export PATH=$CI_PROJECT_DIR/bin:$PATH
+    - cd virter
+    - for BASE in $TEST_BASES; do virter image pull $BASE $LINBIT_DOCKER_REGISTRY/vm/$BASE:latest ; done
+    - ./gen-tests.sh $TEST_BASES
+    - vmshed --nvms ${LINBIT_CI_MAX_CPUS:-20}
+  artifacts:
+    when: always
+    paths:
+      - virter/
+    reports:
+      junit:
+        - virter/tests-out/test-results/*.xml
+

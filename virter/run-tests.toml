@@ -1,0 +1,11 @@
+[[steps]]
+[steps.shell]
+script = """
+set -ex
+
+cd /src
+
+pvcreate /dev/vdb
+vgcreate vg1 /dev/vdb
+VG=vg1 /src/tests/$TEST_NAME
+"""

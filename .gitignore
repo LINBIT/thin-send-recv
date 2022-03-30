@@ -1,0 +1,5 @@
+/thin_send_recv
+/thin_send
+/thin_recv
+/thin_delta_scanner.c
+*.o

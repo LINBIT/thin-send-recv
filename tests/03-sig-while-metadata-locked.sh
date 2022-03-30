@@ -11,9 +11,8 @@ function run_and_kill_with()
 break reserve_metadata_snap
 run
 finish
-queue-signal $1
 delete 1
-detach
+signal $1
 EOF
 }
 

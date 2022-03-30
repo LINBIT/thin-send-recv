@@ -1,5 +1,5 @@
 Name: thin-send-recv
-Version: 1.0.1
+Version: 1.0.2
 Release: 1
 Summary: send and receive for LVM thin volumes
 License: GPLv3+
@@ -41,6 +41,10 @@ rm -rf $RPM_BUILD_ROOT
 %{_bindir}/*
 
 %changelog
+* Wed Mar 30 2022 Roland Kammerer <roland.kammerer@linbit.com> - 1.0.2-1
+- Abort if argv is not present or empty
+- fix support for fstrim/discard/unmap/deallocate
+
 * Tue Feb 15 2022 Philipp Reisner <philipp.reisner@linbit.com> - 1.0.1-1
 - fix handling of data chunks larger 16GiB
 

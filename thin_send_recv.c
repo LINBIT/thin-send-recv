@@ -576,14 +576,14 @@ static bool is_fifo(int fd)
 	return S_ISFIFO(sb.st_mode);
 }
 
-static int splice_data(int in_fd, int out_fd, size_t len)
+static size_t splice_data(int in_fd, int out_fd, size_t len)
 {
 	ssize_t ret;
 
 	do {
 		ret = splice(in_fd, NULL, out_fd, NULL, len, SPLICE_F_MOVE);
 		if (ret == 0) {
-			return 0;
+			break;
 		} else if (ret == -1) {
 			perror("splice(data)");
 			exit(10);
@@ -592,27 +592,32 @@ static int splice_data(int in_fd, int out_fd, size_t len)
 		posix_fadvise(out_fd, 0, 0, POSIX_FADV_DONTNEED);
 	} while (len);
 
-	return 0;
+	return len;
 }
 
-static int splice_data_with_fifo(int in_fd, int out_fd, size_t len, int pipe_fd[2])
+static size_t splice_data_with_fifo(int in_fd, int out_fd, size_t len, int pipe_fd[2])
 {
-	ssize_t ret;
+	ssize_t ret_pipe;
+	ssize_t ret_out;
 
 	do {
-		ret = splice(in_fd, NULL, pipe_fd[1], NULL, len, SPLICE_F_MOVE);
-		if (ret == 0) {
-			return 0;
-		} else if (ret == -1) {
+		ret_pipe = splice(in_fd, NULL, pipe_fd[1], NULL, len, SPLICE_F_MOVE);
+		if (ret_pipe == 0) {
+			break;
+		} else if (ret_pipe == -1) {
 			perror("splice(data_with_fifo)");
 			exit(10);
 		}
 
-		splice_data(pipe_fd[0], out_fd, ret);
-		len -= ret;
+		ret_out = splice_data(pipe_fd[0], out_fd, ret_pipe);
+		if (ret_out != 0) {
+			fprintf(stderr, "Incomplete splice out: %zd bytes remaining.\n", ret_out);
+			break;
+		}
+		len -= ret_pipe;
 	} while (len);
 
-	return 0;
+	return len;
 }
 
 static int copy_data(int in_fd, loff_t *in_off,
@@ -646,9 +651,14 @@ static int copy_data(int in_fd, loff_t *in_off,
 	}
 
 	if (one_is_fifo)
-		return splice_data(in_fd, out_fd, len);
+		len = splice_data(in_fd, out_fd, len);
 	else
-		return splice_data_with_fifo(in_fd, out_fd, len, pipe_fd);
+		len = splice_data_with_fifo(in_fd, out_fd, len, pipe_fd);
+	if (len != 0) {
+		fprintf(stderr, "Incomplete copy_data, %zu bytes missing.\n", len);
+		exit(10);
+	}
+	return len;
 }
 
 static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length, size_t block_size)
@@ -684,7 +694,9 @@ ssize_t read_complete(const int fd, void *const buf, const size_t requested_coun
 			/* read_bytes == 0, end of file */
 			if (completed_count != 0) {
 				/* Partially read buffer, error */
-				completed_count = -1;
+				fprintf(stderr, "Truncated input, bytes expected: %zu, got: %zu.\n",
+					requested_count, completed_count);
+				exit(10);
 			}
 			/* else clean end of file, nothing was read, completed_count == 0 */
 			break;

@@ -55,8 +55,8 @@ enum cmd {
 
 static const char *PGM_NAME = "thin-send-recv";
 static const char *const LOCKFILE_PATH = "/var/run/thin-send-recv.lock";
-static const uint64_t OLD_MAGIC_VALUES[] = {0xE85BC5636CC72A05ULL, 0};
-static const uint64_t MAGIC_VALUE = 0xCA7F00D5DE7EC7ED;
+static const uint64_t OLD_MAGIC_VALUES[] = { 0xCA7F00D5DE7EC7EDULL, 0xE85BC5636CC72A05ULL, 0};
+static const uint64_t MAGIC_VALUE = 0x24C4F02AAE2E4FA9ULL;
 static const uint32_t CATCH_SIGNALS = 1 << SIGABRT | 1 << SIGALRM |
 	1 << SIGBUS | 1 << SIGFPE | 1 << SIGHUP | 1 << SIGINT |
 	1 << SIGPIPE | 1 << SIGPWR | 1 << SIGQUIT | 1 << SIGSEGV |
@@ -377,7 +377,8 @@ static void thin_receive(const char *snap_name, int in_fd)
 		exit(10);
 	}
 	if (ctx.n_chunks == 0 && !ctx.n_begin_stream) {
-		fprintf(stderr, "Empty input? Please updated your sending side!\n");
+		fprintf(stderr, "Empty input.\n");
+		exit(10);
 	}
 
 	close(out_fd);
@@ -919,6 +920,7 @@ static bool process_input(struct stream_context *ctx)
 
 	if (ctx->n_chunks == 1 && cmd != CMD_BEGIN_STREAM) {
 		fprintf(stderr, "Stream does not start with BEGIN_STREAM\n");
+		exit(10);
 	}
 
 	switch (cmd) {

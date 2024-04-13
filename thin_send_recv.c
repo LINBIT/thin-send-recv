@@ -16,6 +16,7 @@
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
+#include <assert.h>
 
 #include <linux/fs.h> /* ioctl BLKDISCARD */
 
@@ -42,8 +43,14 @@ struct chunk {
 } __attribute__((packed));
 
 enum cmd {
-	CMD_DATA,
-	CMD_UNMAP,
+	/* defines the binary format */
+	CMD_DATA = 0,
+	CMD_UNMAP = 1,
+	CMD_BEGIN_STREAM = 2,
+	CMD_END_STREAM = 3,
+
+	/* Forward compat for optional chunks */
+	CMD_FLAG_OPTIONAL_INFO = 0x8000000U,
 };
 
 static const char *PGM_NAME = "thin-send-recv";
@@ -56,6 +63,19 @@ static const uint32_t CATCH_SIGNALS = 1 << SIGABRT | 1 << SIGALRM |
 	1 << SIGTERM | 1 << SIGUSR1 | 1 << SIGUSR2 | 1 << SIGXCPU |
 	1 << SIGXFSZ;
 
+
+struct stream_context {
+	int in_fd;
+	int out_fd;
+
+	/* statistics for some plausibility checks */
+	uint64_t n_chunks;
+	uint64_t n_data;
+	uint64_t n_unmap;
+	int n_begin_stream;
+	int n_end_stream;
+};
+
 static void parse_diff(int in_fd, int out_fd);
 static void parse_dump(int in_fd, int out_fd);
 static void usage_exit(const struct option *long_options, const char *reason);
@@ -67,7 +87,7 @@ static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length, size_
 static void thin_send_vol(const char *vol_name, int out_fd);
 static void thin_send_diff(const char *snap1_name, const char *snap2_name, int out_fd);
 static void thin_receive(const char *snap_name, int in_fd);
-static bool process_input(int in_fd, int out_fd);
+static bool process_input(struct stream_context *ctx);
 static int lockfile_lock(void);
 static void lockfile_unlock(int lockfile_fd);
 static int reserve_metadata_snap(const char *thin_pool_dm_path);
@@ -147,10 +167,13 @@ int main(int argc, char **argv)
 			exit(10);
 		}
 
+		send_header(fileno(stdout), 0, 0, CMD_BEGIN_STREAM);
 		if (optind == argc - 1)
 			thin_send_vol(argv[optind], fileno(stdout));
 		else if (optind == argc - 2)
 			thin_send_diff(argv[optind], argv[optind + 1], fileno(stdout));
+		/* TODO: add some checksum and statistics for recv to verify */
+		send_header(fileno(stdout), 0, 0, CMD_END_STREAM);
 	} else {
 		if (optind != argc - 1)
 			usage_exit(long_options, "One positional argument expected\n");
@@ -313,6 +336,7 @@ static void thin_receive(const char *snap_name, int in_fd)
 	char *snap_file_name;
 	int out_fd;
 	bool cont;
+	struct stream_context ctx = { 0, };
 
 	get_snap_info(snap_name, &snap);
 
@@ -324,9 +348,19 @@ static void thin_receive(const char *snap_name, int in_fd)
 	}
 	free(snap_file_name);
 
+	ctx.in_fd = in_fd;
+	ctx.out_fd = out_fd;
 	do {
-		cont = process_input(in_fd, out_fd);
+		cont = process_input(&ctx);
 	} while (cont);
+
+	if (ctx.n_begin_stream && !ctx.n_end_stream) {
+		fprintf(stderr, "Missing END_STREAM marker.\n");
+		exit(10);
+	}
+	if (ctx.n_chunks == 0 && !ctx.n_begin_stream) {
+		fprintf(stderr, "Empty input? Please updated your sending side!\n");
+	}
 
 	close(out_fd);
 }
@@ -671,10 +705,11 @@ static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length, size_
 	copy_data(in_fd, &begin, out_fd, NULL, length);
 }
 
-ssize_t read_complete(const int fd, void *const buf, const size_t requested_count)
+size_t read_complete(struct stream_context *ctx, void *const buf, const size_t requested_count)
 {
+	const int fd = ctx->in_fd;
 	char *const read_buf = buf;
-	ssize_t completed_count = 0;
+	size_t completed_count = 0;
 
 	while (completed_count < (ssize_t) requested_count) {
 		void *const read_ptr = &read_buf[completed_count];
@@ -683,22 +718,23 @@ ssize_t read_complete(const int fd, void *const buf, const size_t requested_coun
 			completed_count += read_bytes;
 		} else if (read_bytes < 0) {
 			/* No-op if EINTR, otherwise read error */
-			if (errno != EINTR) {
-				completed_count = -1;
-				break;
-			}
+			if (errno == EINTR)
+				continue; /* interrupted read, retry */
+			perror("read()");
+			exit(10);
 		} else {
 			/* read_bytes == 0, end of file */
-			if (completed_count != 0) {
-				/* Partially read buffer, error */
+			/* clean end of file, nothing was read, completed_count == 0 */
+			if (completed_count == 0)
+				break;
+			/* else partially read buffer, error */
+			if (ctx->n_end_stream)
+				fprintf(stderr, "Trailing garbage beyond END_STREAM marker.\n");
+			else
 				fprintf(stderr, "Truncated input, bytes expected: %zu, got: %zu.\n",
 					requested_count, completed_count);
-				exit(10);
-			}
-			/* else clean end of file, nothing was read, completed_count == 0 */
-			break;
+			exit(10);
 		}
-		/* else interrupted read, retry */
 	}
 
 	return completed_count;
@@ -747,8 +783,10 @@ static void cmd_unmap(int out_fd, off_t byte_offset, size_t byte_length)
 	}
 }
 
-static bool process_input(int in_fd, int out_fd)
+static bool process_input(struct stream_context *ctx)
 {
+	int in_fd = ctx->in_fd;
+	int out_fd = ctx->out_fd;
 	struct chunk chunk;
 	uint64_t recv_magic_value;
 	off_t offset;
@@ -756,12 +794,15 @@ static bool process_input(int in_fd, int out_fd)
 	enum cmd cmd;
 	int ret;
 
-	ret = read_complete(in_fd, &chunk, sizeof(chunk));
-	if (ret == -1) {
-		perror("read failed");
-		exit(10);
-	} else if (ret == 0) {
+	ret = read_complete(ctx, &chunk, sizeof(chunk));
+	if (ret == 0)
 		return false;
+	assert(ret == sizeof(chunk));
+
+	ctx->n_chunks++;
+	if (ctx->n_end_stream) {
+		fprintf(stderr, "Stream continued beyond END_STREAM marker\n");
+		exit(10);
 	}
 
 	recv_magic_value = be64toh(chunk.magic);
@@ -798,9 +839,14 @@ static bool process_input(int in_fd, int out_fd)
 	length = be64toh(chunk.length);
 	cmd = be32toh(chunk.cmd);
 
+	if (ctx->n_chunks == 1 && cmd != CMD_BEGIN_STREAM) {
+		fprintf(stderr, "Stream does not start with BEGIN_STREAM\n");
+	}
+
 	switch (cmd) {
 	case CMD_DATA:
 		copy_data(in_fd, NULL, out_fd, &offset, length);
+		ctx->n_data++;
 		break;
 
 	case CMD_UNMAP:
@@ -816,7 +862,31 @@ static bool process_input(int in_fd, int out_fd)
 		}
 		 */
 		cmd_unmap(out_fd, offset, length);
+		ctx->n_unmap++;
 		break;
+	case CMD_BEGIN_STREAM:
+		/* TODO store something useful in it, do something useful with it? */
+		if (ctx->n_chunks != 1) {
+			fprintf(stderr, "BEGIN_STREAM must occur only once, at the start of the stream\n");
+			exit(10);
+		}
+		ctx->n_begin_stream++;
+		break;
+	case CMD_END_STREAM:
+		/* TODO store something useful in it, do something useful with it? */
+		if (ctx->n_begin_stream != 1) {
+			fprintf(stderr, "END_STREAM without BEGIN_STREAM!?\n");
+			exit(10);
+		}
+		ctx->n_end_stream++;
+		break;
+	default:
+		if (cmd & CMD_FLAG_OPTIONAL_INFO)
+			fprintf(stderr, "Unrecognized optional chunk 0x%x\n", cmd);
+		else {
+			fprintf(stderr, "Unrecognized chunk 0x%x\n", cmd);
+			exit(10);
+		}
 	}
 
 	return true;

@@ -64,11 +64,17 @@ static const uint32_t CATCH_SIGNALS = 1 << SIGABRT | 1 << SIGALRM |
 	1 << SIGXFSZ;
 
 
+/* statistics for some plausibility checks */
+struct stream_stats {
+	uint64_t n_chunks;
+	uint64_t n_data;
+	uint64_t n_unmap;
+} __attribute__((packed));
+
 struct stream_context {
 	int in_fd;
 	int out_fd;
 
-	/* statistics for some plausibility checks */
 	uint64_t n_chunks;
 	uint64_t n_data;
 	uint64_t n_unmap;
@@ -76,8 +82,9 @@ struct stream_context {
 	int n_end_stream;
 };
 
-static void parse_diff(int in_fd, int out_fd);
-static void parse_dump(int in_fd, int out_fd);
+static void parse_diff(struct stream_context *ctx);
+static void parse_dump(struct stream_context *ctx);
+static void send_end_stream(struct stream_context *ctx);
 static void usage_exit(const struct option *long_options, const char *reason);
 static void get_snap_info(const char *snap_name, struct snap_info *info);
 static int checked_asprintf(char **strp, const char *fmt, ...);
@@ -167,13 +174,14 @@ int main(int argc, char **argv)
 			exit(10);
 		}
 
+		/* TODO: add some meta data? */
 		send_header(fileno(stdout), 0, 0, CMD_BEGIN_STREAM);
+		/* CMD_END_STREAM sent as last action in thin_send_vol/thin_send_diff */
+
 		if (optind == argc - 1)
 			thin_send_vol(argv[optind], fileno(stdout));
 		else if (optind == argc - 2)
 			thin_send_diff(argv[optind], argv[optind + 1], fileno(stdout));
-		/* TODO: add some checksum and statistics for recv to verify */
-		send_header(fileno(stdout), 0, 0, CMD_END_STREAM);
 	} else {
 		if (optind != argc - 1)
 			usage_exit(long_options, "One positional argument expected\n");
@@ -215,6 +223,7 @@ static char *get_thin_pool_dm_path(const struct snap_info *snap)
 
 static void thin_send_diff(const char *snap1_name, const char *snap2_name, int out_fd)
 {
+	struct stream_context ctx = { 0, };
 	struct snap_info snap1, snap2;
 	char tmp_file_name[] = "/tmp/thin_send_recv_XXXXXX";
 	char *thin_pool_dm_path;
@@ -267,7 +276,11 @@ static void thin_send_diff(const char *snap1_name, const char *snap2_name, int o
 		exit(10);
 	}
 
-	parse_diff(snap2_fd, out_fd);
+	ctx.in_fd = snap2_fd;
+	ctx.out_fd = out_fd;
+	ctx.n_chunks = 2; /* begin and end marker count */
+	parse_diff(&ctx);
+	send_end_stream(&ctx);
 
 	fclose(yyin);
 	close(snap2_fd);
@@ -278,6 +291,7 @@ static void thin_send_diff(const char *snap1_name, const char *snap2_name, int o
 
 static void thin_send_vol(const char *vol_name, int out_fd)
 {
+	struct stream_context ctx = { 0, };
 	struct snap_info vol;
 	char tmp_file_name[] = "/tmp/thin_send_recv_XXXXXX";
 	char *thin_pool_dm_path;
@@ -324,7 +338,11 @@ static void thin_send_vol(const char *vol_name, int out_fd)
 		exit(10);
 	}
 
-	parse_dump(vol_fd, out_fd);
+	ctx.in_fd = vol_fd;
+	ctx.out_fd = out_fd;
+	ctx.n_chunks = 2; /* begin and end marker count */
+	parse_dump(&ctx);
+	send_end_stream(&ctx);
 
 	fclose(yyin);
 	close(vol_fd);
@@ -455,9 +473,11 @@ static const char *expect_attribute(int attribute)
 	return str_value;
 }
 
-static void parse_diff(int in_fd, int out_fd)
+static void parse_diff(struct stream_context *ctx)
 {
 	long block_size;
+	int in_fd = ctx->in_fd;
+	int out_fd = ctx->out_fd;
 
 	expect_tag(TK_SUPERBLOCK);
 	expect_attribute(TK_UUID);
@@ -498,13 +518,16 @@ static void parse_diff(int in_fd, int out_fd)
 				   begin * block_size * 512,
 				   length * block_size * 512,
 				   block_size * 512);
+			ctx->n_data++;
+			ctx->n_chunks++;
 		} else if (token == TK_LEFT_ONLY) {
 			send_header(out_fd,
 				    begin * block_size * 512,
 				    length * block_size * 512,
 				    CMD_UNMAP);
+			ctx->n_unmap++;
+			ctx->n_chunks++;
 		}
-
 	}
 break_loop:
 	expect(TK_DIFF);
@@ -513,9 +536,11 @@ break_loop:
 	expect_end_tag(TK_SUPERBLOCK);
 }
 
-static void parse_dump(int in_fd, int out_fd)
+static void parse_dump(struct stream_context *ctx)
 {
 	long block_size;
+	int in_fd = ctx->in_fd;
+	int out_fd = ctx->out_fd;
 
 	expect_tag(TK_SUPERBLOCK);
 	expect_attribute(TK_UUID);
@@ -566,6 +591,8 @@ static void parse_dump(int in_fd, int out_fd)
 			   begin * block_size * 512,
 			   length * block_size * 512,
 			   block_size * 512);
+		ctx->n_chunks++;
+		ctx->n_data++;
 	}
 break_loop:
 	expect(TK_DEVICE);
@@ -574,28 +601,41 @@ break_loop:
 	expect_end_tag(TK_SUPERBLOCK);
 }
 
-static void send_header(int out_fd, loff_t begin, size_t length, enum cmd cmd)
+static void write_all(int out_fd, const char *data, const size_t count)
 {
-	size_t write_offset;
-	struct chunk chunk = {
-		.magic = htobe64(MAGIC_VALUE),
-		.offset = htobe64(begin),
-		.length = htobe64(length),
-		.cmd = htobe32(cmd),
-	};
-	const char *const chunk_data = (const char *) &chunk;
-
-
-	write_offset = 0;
+	size_t write_offset = 0;
 	do {
-		const ssize_t write_rc = write(out_fd, &chunk_data[write_offset], sizeof (chunk) - write_offset);
+		const ssize_t write_rc = write(out_fd, &data[write_offset], count - write_offset);
 		if (write_rc > 0) {
 			write_offset += write_rc;
 		} else if (!(write_rc == -1 && errno == EINTR)) {
 			perror("write failed");
 			exit(10);
 		}
-	} while (write_offset < sizeof (chunk));
+	} while (write_offset < count);
+}
+
+static void send_end_stream(struct stream_context *ctx)
+{
+	/* Maybe add "total bytes in stream", "checksum over full stream"? */
+	struct stream_stats stats = {
+		.n_chunks = htobe64(ctx->n_chunks),
+		.n_data = htobe64(ctx->n_data),
+		.n_unmap = htobe64(ctx->n_unmap)
+	};
+	send_header(ctx->out_fd, 0, sizeof(stats), CMD_END_STREAM);
+	write_all(ctx->out_fd, (const char *)&stats, sizeof(stats));
+}
+
+static void send_header(int out_fd, loff_t begin, size_t length, enum cmd cmd)
+{
+	struct chunk chunk = {
+		.magic = htobe64(MAGIC_VALUE),
+		.offset = htobe64(begin),
+		.length = htobe64(length),
+		.cmd = htobe32(cmd),
+	};
+	write_all(out_fd, (const char *) &chunk, sizeof(chunk));
 }
 
 static bool is_fifo(int fd)
@@ -783,6 +823,44 @@ static void cmd_unmap(int out_fd, off_t byte_offset, size_t byte_length)
 	}
 }
 
+static void verify_end_stream(struct stream_context *ctx, uint64_t offset, uint64_t length)
+{
+	/* offset does not carry meaning (yet), expected to be 0.
+	 * length is expected to be sizeof(stream_stats).
+	 * "Forward compat" could allow larger length to add additional info,
+	 * but I think those should rather be added in "optional chunks" just
+	 * before the END_STREAM marker.
+	 * Treat them as additional magic numbers. */
+
+	struct stream_stats stats;
+	size_t count;
+	if (!(offset == 0 && length == sizeof(stats))) {
+		fprintf(stderr, "Cannot verify END_STREAM marker chunk: o: %"PRIu64", l: %"PRIu64"\n",
+			offset, length);
+		exit(10);
+	}
+	errno = 0;
+	count = read_complete(ctx, &stats, sizeof(stats));
+	if (count != sizeof(stats)) {
+		fprintf(stderr, "Cannot verify END_STREAM marker, incomplete stats: expected %zu bytes, got %zu\n",
+			sizeof(stats), count);
+		exit(10);
+	}
+	stats.n_chunks = be64toh(stats.n_chunks);
+	stats.n_unmap = be64toh(stats.n_unmap);
+	stats.n_data = be64toh(stats.n_data);
+	if (ctx->n_chunks != stats.n_chunks
+	||  ctx->n_unmap != stats.n_unmap
+	||  ctx->n_data != stats.n_data) {
+		fprintf(stderr,
+			"END_STREAM marker mismatch: chunks/unmap/data: stream: %"PRIu64"/%"PRIu64"/%"PRIu64", marker: %"PRIu64"/%"PRIu64"/%"PRIu64"\n",
+			ctx->n_chunks, ctx->n_unmap, ctx->n_data,
+			stats.n_chunks, stats.n_unmap, stats.n_data
+			);
+		exit(10);
+	}
+}
+
 static bool process_input(struct stream_context *ctx)
 {
 	int in_fd = ctx->in_fd;
@@ -878,6 +956,7 @@ static bool process_input(struct stream_context *ctx)
 			fprintf(stderr, "END_STREAM without BEGIN_STREAM!?\n");
 			exit(10);
 		}
+		verify_end_stream(ctx, offset, length);
 		ctx->n_end_stream++;
 		break;
 	default:

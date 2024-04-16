@@ -12,6 +12,7 @@
 #include <stdbool.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
@@ -620,9 +621,9 @@ static size_t splice_data_with_fifo(int in_fd, int out_fd, size_t len, int pipe_
 	return len;
 }
 
-static int copy_data(int in_fd, loff_t *in_off,
+static void copy_data(int in_fd, loff_t *in_off,
 		     int out_fd, loff_t *out_off,
-		     size_t len, size_t buffer_size)
+		     size_t len)
 {
 	static int one_is_fifo = -1;
 	static int pipe_fd[2];
@@ -640,14 +641,18 @@ static int copy_data(int in_fd, loff_t *in_off,
 
 	if (in_off) {
 		off_t r = lseek(in_fd, *in_off, SEEK_SET);
-		if (r == -1)
-			return -1;
+		if (r == -1) {
+			fprintf(stderr, "lseek(in_fd, %jd, SEEK_SET): %m\n", (intmax_t)*in_off);
+			exit(10);
+		}
 	}
 
 	if (out_off) {
 		off_t r = lseek(out_fd, *out_off, SEEK_SET);
-		if (r == -1)
-			return -1;
+		if (r == -1) {
+			fprintf(stderr, "lseek(out_fd, %jd, SEEK_SET): %m\n", (intmax_t)*out_off);
+			exit(10);
+		}
 	}
 
 	if (one_is_fifo)
@@ -658,20 +663,12 @@ static int copy_data(int in_fd, loff_t *in_off,
 		fprintf(stderr, "Incomplete copy_data, %zu bytes missing.\n", len);
 		exit(10);
 	}
-	return len;
 }
 
 static void send_chunk(int in_fd, int out_fd, loff_t begin, size_t length, size_t block_size)
 {
-	int ret;
-
 	send_header(out_fd, begin, length, CMD_DATA);
-
-	ret = copy_data(in_fd, &begin, out_fd, NULL, length, block_size);
-	if (ret == -1) {
-		perror("copy_data() failed");
-		exit(10);
-	}
+	copy_data(in_fd, &begin, out_fd, NULL, length);
 }
 
 ssize_t read_complete(const int fd, void *const buf, const size_t requested_count)
@@ -803,11 +800,7 @@ static bool process_input(int in_fd, int out_fd)
 
 	switch (cmd) {
 	case CMD_DATA:
-		ret = copy_data(in_fd, NULL, out_fd, &offset, length, 65536);
-		if (ret == -1) {
-			perror("copy_data() failed");
-			exit(10);
-		}
+		copy_data(in_fd, NULL, out_fd, &offset, length);
 		break;
 
 	case CMD_UNMAP:

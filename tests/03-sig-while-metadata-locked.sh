@@ -7,7 +7,7 @@ set -o pipefail
 function run_and_kill_with()
 {
     echo Testing $1
-    gdb --args ./thin_send --send /dev/$VG/tlv_source <<EOF > /dev/null
+    gdb --quiet --args ./thin_send --send /dev/$VG/tlv_source <<EOF > /dev/null
 break reserve_metadata_snap
 run
 finish

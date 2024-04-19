@@ -50,7 +50,7 @@ enum cmd {
 	CMD_END_STREAM = 3,
 
 	/* Forward compat for optional chunks */
-	CMD_FLAG_OPTIONAL_INFO = 0x8000000U,
+	CMD_FLAG_OPTIONAL_INFO = 1U << 31,
 };
 
 static const char *PGM_NAME = "thin-send-recv";
@@ -962,10 +962,24 @@ static bool process_input(struct stream_context *ctx)
 		ctx->n_end_stream++;
 		break;
 	default:
-		if (cmd & CMD_FLAG_OPTIONAL_INFO)
-			fprintf(stderr, "Unrecognized optional chunk 0x%x\n", cmd);
-		else {
-			fprintf(stderr, "Unrecognized chunk 0x%x\n", cmd);
+		if (cmd & CMD_FLAG_OPTIONAL_INFO) {
+			size_t remaining = length;
+
+			fprintf(stderr, "Unrecognized optional chunk 0x%x, length %zu\n", cmd, length);
+			while (remaining > 0) {
+				char sink[512];
+				size_t skip = sizeof(sink);
+
+				if (skip > remaining)
+					skip = remaining;
+				if (read_complete(ctx, sink, skip) != skip) {
+					fputs("Truncated input.\n", stderr);
+					exit(10);
+				}
+				remaining -= skip;
+			}
+		} else {
+			fprintf(stderr, "Unrecognized chunk 0x%x, length %zu\n", cmd, length);
 			exit(10);
 		}
 	}

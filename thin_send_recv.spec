@@ -1,5 +1,5 @@
 Name: thin-send-recv
-Version: 1.0.2
+Version: 1.1.0
 Release: 1
 Summary: send and receive for LVM thin volumes
 License: GPLv3+

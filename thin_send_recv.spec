@@ -41,6 +41,10 @@ rm -rf $RPM_BUILD_ROOT
 %{_bindir}/*
 
 %changelog
+* Fri Apr 19 2024 Lars Ellenberg <lars.ellenberg@linbit.com> - 1.1.0-1
+- bump magic, stream format change
+- detect incomplete streams
+
 * Wed Mar 30 2022 Roland Kammerer <roland.kammerer@linbit.com> - 1.0.2-1
 - Abort if argv is not present or empty
 - fix support for fstrim/discard/unmap/deallocate

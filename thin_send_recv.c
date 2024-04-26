@@ -55,7 +55,7 @@ enum cmd {
 
 static const char *PGM_NAME = "thin-send-recv";
 static const char *const LOCKFILE_PATH = "/var/run/thin-send-recv.lock";
-static const uint64_t MAGIC_VALUE = 0x24C4F02AAE2E4FA9ULL;
+static const uint64_t MAGIC_VALUE_1_1 = 0x24C4F02AAE2E4FA9ULL;
 static const uint64_t MAGIC_VALUE_1_0 = 0xCA7F00D5DE7EC7EDULL;
 static const uint64_t OLD_MAGIC = 0xE85BC5636CC72A05ULL;
 static const uint32_t CATCH_SIGNALS = 1 << SIGABRT | 1 << SIGALRM |
@@ -106,6 +106,25 @@ static const char *data_for_signal_handler;
 
 static bool unsupported_unmap_is_fatal = false;
 
+enum stream_format {
+	STREAM_FORMAT_AUTO,
+	STREAM_FORMAT_1_0,
+	STREAM_FORMAT_1_1,
+};
+
+enum {	OPT_STREAM_FORMAT = 0x1000 };
+
+static enum stream_format stream_format = STREAM_FORMAT_AUTO;
+static enum stream_format to_stream_format(const char *opt)
+{
+	if (!strcmp(opt, "auto")) return STREAM_FORMAT_AUTO;
+	if (!strcmp(opt, "1.0")) return STREAM_FORMAT_1_0;
+	if (!strcmp(opt, "1.1")) return STREAM_FORMAT_1_1;
+
+	fprintf(stderr, "unknown stream format specifier \"%s\"; should be one of \"auto\", \"1.0\", \"1.1\".\n", opt);
+	exit(10);
+}
+
 int main(int argc, char **argv)
 {
 	if (argv == NULL || argc < 1) {
@@ -122,6 +141,7 @@ int main(int argc, char **argv)
 		{"receive",   no_argument, 0, 'r' },
 		{"allow-tty", no_argument, 0, 't' },
 		{"about",     no_argument, 0, 'a' },
+		{"accept-stream-format",     required_argument, 0, OPT_STREAM_FORMAT },
 		{0,         0,             0, 0 }
 	};
 
@@ -148,6 +168,9 @@ int main(int argc, char **argv)
 			break;
 		case 't':
 			allow_tty = true;
+			break;
+		case OPT_STREAM_FORMAT:
+			stream_format = to_stream_format(optarg);
 			break;
 		case -1:
 			break;
@@ -378,15 +401,10 @@ static void thin_receive(const char *snap_name, int in_fd)
 		fprintf(stderr, "Missing END_STREAM marker.\n");
 		exit(10);
 	}
-	if (ctx.n_chunks == 0 && !ctx.n_begin_stream) {
+	if (ctx.n_chunks == 0) {
 		fprintf(stderr, "Empty input.\n");
-		/* FIXME what now?
-		 * Backward compat would require me to accept empty input.
-		 * if (expect_magic != MAGIC_VALUE_1_0) does not work, obviously,
-		 * with empty input, there is nothing to "detect" whether that
-		 * input was produced by an older version of this tool or not.
-		 */
-		exit(10);
+		if (stream_format == STREAM_FORMAT_1_1)
+			exit(10);
 	}
 
 	close(out_fd);
@@ -639,7 +657,7 @@ static void send_end_stream(struct stream_context *ctx)
 static void send_header(int out_fd, loff_t begin, size_t length, enum cmd cmd)
 {
 	struct chunk chunk = {
-		.magic = htobe64(MAGIC_VALUE),
+		.magic = htobe64(MAGIC_VALUE_1_1),
 		.offset = htobe64(begin),
 		.length = htobe64(length),
 		.cmd = htobe32(cmd),
@@ -898,23 +916,33 @@ static bool process_input(struct stream_context *ctx)
 	cmd = be32toh(chunk.cmd);
 
 	if (ctx->n_chunks == 1) {
-		if (recv_magic_value == MAGIC_VALUE) {
-			expect_magic = MAGIC_VALUE;
-		} else if (recv_magic_value == MAGIC_VALUE_1_0) {
-			expect_magic = MAGIC_VALUE_1_0;
-			/* silently accept previous format stream */
-		} else {
-			if (recv_magic_value == OLD_MAGIC) {
-				fputs("Received data contains the magic value of a previous version of this program.\n"
-				      "Make sure that the version of this program that is used on the sending side matches\n"
-				      "the version of this program used on the receiving side.\n",
-				      stderr);
+		if (recv_magic_value == MAGIC_VALUE_1_1) {
+			if (stream_format == STREAM_FORMAT_1_1
+			||  stream_format == STREAM_FORMAT_AUTO) {
+				expect_magic = MAGIC_VALUE_1_1;
 			} else {
-				fprintf(stderr, "Magic value mismatch, encountered unknown value 0x%llX\n",
-					(unsigned long long) recv_magic_value);
+				fprintf(stderr, "Found current version magic, but was told to only accept older version magic.\n");
 			}
-			exit(10);
+		} else if (recv_magic_value == OLD_MAGIC) {
+			fputs("Received data contains the magic value of a previous version of this program.\n"
+			      "Make sure that the version of this program that is used on the sending side matches\n"
+			      "the version of this program used on the receiving side.\n",
+			      stderr);
+		} else if (recv_magic_value == MAGIC_VALUE_1_0) {
+			if (stream_format == STREAM_FORMAT_1_0
+			||  stream_format == STREAM_FORMAT_AUTO) {
+				/* silently accept previous format stream */
+				expect_magic = MAGIC_VALUE_1_0;
+			} else {
+				fprintf(stderr, "Found old version magic, but was told to only accept current version magic.\n");
+			}
+		} else {
+			fprintf(stderr, "Magic value mismatch, encountered unknown value 0x%llX\n",
+				(unsigned long long) recv_magic_value);
 		}
+
+		if (!expect_magic)
+			exit(10);
 	}
 
 	if (expect_magic != recv_magic_value) {

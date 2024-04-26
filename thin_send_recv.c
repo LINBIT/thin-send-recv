@@ -55,14 +55,16 @@ enum cmd {
 
 static const char *PGM_NAME = "thin-send-recv";
 static const char *const LOCKFILE_PATH = "/var/run/thin-send-recv.lock";
-static const uint64_t OLD_MAGIC_VALUES[] = { 0xCA7F00D5DE7EC7EDULL, 0xE85BC5636CC72A05ULL, 0};
 static const uint64_t MAGIC_VALUE = 0x24C4F02AAE2E4FA9ULL;
+static const uint64_t MAGIC_VALUE_1_0 = 0xCA7F00D5DE7EC7EDULL;
+static const uint64_t OLD_MAGIC = 0xE85BC5636CC72A05ULL;
 static const uint32_t CATCH_SIGNALS = 1 << SIGABRT | 1 << SIGALRM |
 	1 << SIGBUS | 1 << SIGFPE | 1 << SIGHUP | 1 << SIGINT |
 	1 << SIGPIPE | 1 << SIGPWR | 1 << SIGQUIT | 1 << SIGSEGV |
 	1 << SIGTERM | 1 << SIGUSR1 | 1 << SIGUSR2 | 1 << SIGXCPU |
 	1 << SIGXFSZ;
 
+static uint64_t expect_magic;
 
 /* statistics for some plausibility checks */
 struct stream_stats {
@@ -378,6 +380,12 @@ static void thin_receive(const char *snap_name, int in_fd)
 	}
 	if (ctx.n_chunks == 0 && !ctx.n_begin_stream) {
 		fprintf(stderr, "Empty input.\n");
+		/* FIXME what now?
+		 * Backward compat would require me to accept empty input.
+		 * if (expect_magic != MAGIC_VALUE_1_0) does not work, obviously,
+		 * with empty input, there is nothing to "detect" whether that
+		 * input was produced by an older version of this tool or not.
+		 */
 		exit(10);
 	}
 
@@ -885,42 +893,49 @@ static bool process_input(struct stream_context *ctx)
 	}
 
 	recv_magic_value = be64toh(chunk.magic);
-	if (MAGIC_VALUE != recv_magic_value) {
-		size_t magic_idx;
-		bool is_old_magic;
-
-		is_old_magic = false;
-		for (magic_idx = 0;
-		     magic_idx < ~((size_t) 0) &&
-		     OLD_MAGIC_VALUES[magic_idx] != 0;
-		     ++magic_idx) {
-			if (OLD_MAGIC_VALUES[magic_idx] == recv_magic_value) {
-				is_old_magic = true;
-				break;
-			}
-		}
-		if (is_old_magic) {
-			fputs("Received data contains the magic value of a previous version of this program.\n"
-			      "Make sure that the version of this program that is used on the sending side matches\n"
-			      "the version of this program used on the receiving side.\n",
-			      stderr);
-		} else {
-			fprintf(
-				stderr,
-				"Magic value mismatch, encountered unknown value 0x%llX\n",
-				(unsigned long long) recv_magic_value
-			);
-		}
-		exit(10);
-	}
-
 	offset = be64toh(chunk.offset);
 	length = be64toh(chunk.length);
 	cmd = be32toh(chunk.cmd);
 
-	if (ctx->n_chunks == 1 && cmd != CMD_BEGIN_STREAM) {
+	if (ctx->n_chunks == 1) {
+		if (recv_magic_value == MAGIC_VALUE) {
+			expect_magic = MAGIC_VALUE;
+		} else if (recv_magic_value == MAGIC_VALUE_1_0) {
+			expect_magic = MAGIC_VALUE_1_0;
+			/* silently accept previous format stream */
+		} else {
+			if (recv_magic_value == OLD_MAGIC) {
+				fputs("Received data contains the magic value of a previous version of this program.\n"
+				      "Make sure that the version of this program that is used on the sending side matches\n"
+				      "the version of this program used on the receiving side.\n",
+				      stderr);
+			} else {
+				fprintf(stderr, "Magic value mismatch, encountered unknown value 0x%llX\n",
+					(unsigned long long) recv_magic_value);
+			}
+			exit(10);
+		}
+	}
+
+	if (expect_magic != recv_magic_value) {
+		fprintf(stderr, "Magic value mismatch, expected 0x%llX, found 0x%llX\n",
+			(unsigned long long) expect_magic,
+			(unsigned long long) recv_magic_value);
+		exit(10);
+	}
+
+	if (ctx->n_chunks == 1 && cmd != CMD_BEGIN_STREAM && expect_magic != MAGIC_VALUE_1_0) {
 		fprintf(stderr, "Stream does not start with BEGIN_STREAM\n");
 		exit(10);
+	}
+
+	if (expect_magic == MAGIC_VALUE_1_0 && cmd != CMD_DATA && cmd != CMD_UNMAP) {
+		fprintf(stderr, "Old format stream containing unknown cmd chunk: %u\n", cmd);
+		exit(10);
+		/*
+		 * FIXME: rather silently accept, for bug to bug compat?
+		 * Previous version would ignore unknown cmd values.
+		 */
 	}
 
 	switch (cmd) {
@@ -944,6 +959,8 @@ static bool process_input(struct stream_context *ctx)
 		cmd_unmap(out_fd, offset, length);
 		ctx->n_unmap++;
 		break;
+
+	/* below is not even reached for MAGIC_VALUE_1_0 */
 	case CMD_BEGIN_STREAM:
 		/* TODO store something useful in it, do something useful with it? */
 		if (ctx->n_chunks != 1) {

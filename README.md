@@ -14,7 +14,7 @@ send / receive process can be triggered with the following command;
 
 `$ thin_send ssd_vg/CentOS7.6 ssd_vg/li0 | ssh root@target-machine thin_recv kubuntu-vg/li0`
 
-or you can you socat for streaming;
+or you can use socat for streaming;
 
 `target-machine$ socat TCP-LISTEN:4321 STDOUT | zstd -d | thin_recv kubuntu-vg/li0`
 

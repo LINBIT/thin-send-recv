@@ -1,5 +1,5 @@
 Name: thin-send-recv
-Version: 1.1.0
+Version: 1.1.1
 Release: 1
 Summary: send and receive for LVM thin volumes
 License: GPLv3+
@@ -41,6 +41,11 @@ rm -rf $RPM_BUILD_ROOT
 %{_bindir}/*
 
 %changelog
+* Thu May 23 2024 Roland Kammerer <roland.kammerer@linbit.com> - 1.1.1-1
+- Add backward compat to receive previous format
+- allow to --accept-stream-format=auto|1.0|1.1
+- fix wording in readme
+
 * Fri Apr 19 2024 Lars Ellenberg <lars.ellenberg@linbit.com> - 1.1.0-1
 - bump magic, stream format change
 - detect incomplete streams

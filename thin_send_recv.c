@@ -500,6 +500,31 @@ static const char *expect_attribute(int attribute)
 	return str_value;
 }
 
+/**
+ * Parse the "flags" attribute and the following "version" attribute, ignoring flags if it does
+ * not exist.
+ */
+static void expect_flags_and_or_version()
+{
+	int token = yylex();
+	switch(token) {
+		case TK_FLAGS:
+			expect('=');
+			expect(TK_VALUE);
+			// After flags, we expect version, so parse this here as well.
+			expect(TK_VERSION);
+			/* fall through */
+		case TK_VERSION:
+			expect('=');
+			expect(TK_VALUE);
+			break;
+		default:
+			fprintf(stderr, "Got unexpected token %d. Expected a %d or %d\n", token, TK_FLAGS, TK_VERSION);
+			exit(20);
+	}
+
+}
+
 static void parse_diff(struct stream_context *ctx)
 {
 	long block_size;
@@ -573,8 +598,7 @@ static void parse_dump(struct stream_context *ctx)
 	expect_attribute(TK_UUID);
 	expect_attribute(TK_TIME);
 	expect_attribute(TK_TRANSACTION);
-	expect_attribute(TK_FLAGS);
-	expect_attribute(TK_VERSION);
+	expect_flags_and_or_version();
 	block_size = atol(expect_attribute(TK_DATA_BLOCK_SIZE));
 	expect_attribute(TK_NR_DATA_BLOCKS);
 	expect('>');

@@ -1,3 +1,5 @@
+version = 1
+
 [[steps]]
 [steps.shell]
 script = """
@@ -7,5 +9,12 @@ cd /src
 
 pvcreate /dev/vdb
 vgcreate vg1 /dev/vdb
+mkdir -p /var/log/sanitizer
 VG=vg1 /src/tests/$TEST_NAME
 """
+[steps.shell.env]
+UBSAN_OPTIONS = "log_path=/var/log/sanitizer/sanitizer:log_exe_name=yes:log_suffix=txt"
+# Do not detect leaks, we are a oneshot program.
+# Do not handle SEGV from ASAN, as that leads to broken tests when checking for metadata release.
+# Do not handle SIGFPE from ASAN, as that leads to broken tests when checking for metadata release.
+ASAN_OPTIONS = "log_path=/var/log/sanitizer/sanitizer:log_exe_name=yes:log_suffix=txt:detect_leaks=0:handle_segv=0:handle_sigfpe=0"

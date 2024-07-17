@@ -1,3 +1,5 @@
+version = 1
+
 [[steps]]
 [steps.rsync]
 source = "../"
@@ -8,16 +10,23 @@ dest = "/src"
 script = """
 set -ex
 
+EXTRA_CFLAGS="-fsanitize=address -fsanitize=undefined -g"
+LDFLAGS="-fsanitize=address -fsanitize=undefined -g"
+
 if command -v apt-get
 then
     apt-get update
     apt-get install -y make gcc gdb flex lvm2 thin-provisioning-tools
 elif command -v dnf
 then
-    dnf install -y flex lvm2 make gcc gdb
+    dnf install -y flex lvm2 make gcc gdb libasan libubsan
 elif command -v yum
 then
-    yum install -y flex lvm2 make gcc gdb
+    sed -e 's/^mirrorlist=/#mirrorlist=/' -e 's%^#baseurl=http://mirror.centos.org%baseurl=http://vault.centos.org%' -i /etc/yum.repos.d/*.repo
+    yum install -y flex lvm2 make gcc gdb libasan
+    # This GCC version only supports ASAN
+    EXTRA_CFLAGS="-fsanitize=address -g"
+    LDFLAGS="-fsanitize=address -g"
 else
     echo Unknown host system >&2
     exit 1
@@ -25,5 +34,5 @@ fi
 
 cd /src
 make clean
-make
+make EXTRA_CFLAGS="$EXTRA_CFLAGS" LDFLAGS="$LDFLAGS"
 """

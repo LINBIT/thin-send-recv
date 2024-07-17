@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-BASES="${*:-alma-8 centos-7 ubuntu-bionic ubuntu-focal}"
+BASES="${*:-alma-9 alma-8 centos-7 ubuntu-bionic ubuntu-focal ubuntu-noble}"
 
 cat <<EOF > vms.toml
 name = "thin-send-recv"
@@ -22,6 +22,9 @@ done
 cat <<EOF > tests.toml
 test_suite_file = "run-tests.toml"
 test_timeout = "1m"
+artifacts = [
+  "/var/log/sanitizer",
+]
 
 [tests]
 EOF

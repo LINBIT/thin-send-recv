@@ -1,8 +1,8 @@
 variables:
-  TEST_BASES: alma-8 centos-7 ubuntu-bionic ubuntu-focal
-  VIRTER_VERSION: v0.18.1
-  VMSHED_VERSION: v0.15.0
-  BUILD_HELPERS_VERSION: dfbf85c26dd39ad1a88807b01fda1dc1d536abbb
+  TEST_BASES: alma-9 alma-8 centos-7 ubuntu-bionic ubuntu-focal ubuntu-noble
+  VIRTER_VERSION: v0.27.0
+  VMSHED_VERSION: v0.22.0
+  BUILD_HELPERS_VERSION: 1f06f67592fbd5c655f62342684af25ecfdede1b
 
 workflow:
   rules:
@@ -40,9 +40,8 @@ test:
     - set -ex
     - export PATH=$CI_PROJECT_DIR/bin:$PATH
     - cd virter
-    - for BASE in $TEST_BASES; do virter image pull $BASE $LINBIT_DOCKER_REGISTRY/vm/$BASE:latest ; done
     - ./gen-tests.sh $TEST_BASES
-    - vmshed --nvms ${LINBIT_CI_MAX_CPUS:-20}
+    - vmshed --nvms ${LINBIT_CI_MAX_CPUS:-20} --pull-template "$LINBIT_DOCKER_REGISTRY/vm/{{ .Image }}:latest"
   artifacts:
     when: always
     paths:

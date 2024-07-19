@@ -1,3 +1,11 @@
+thin-send-recv (1.1.2-1) unstable; urgency=medium
+
+  [ Moritz Wanzenböck ]
+  * ci: test with ASAN and UBSAN enabled
+  * parse thin_dump metadata in new format
+
+ -- Roland Kammerer <roland.kammerer@linbit.com>  Fri, 19 Jul 2024 10:16:11 +0200
+
 thin-send-recv (1.1.1-1) unstable; urgency=medium
 
   [ Lars Ellenberg ]

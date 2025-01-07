@@ -2,7 +2,8 @@ all-src = Makefile README.md thin_delta_scanner.fl thin_delta_scanner.h thin_sen
 all-src += run_tests.sh $(addprefix tests/,00-volume-copy.sh 01-volume-diff.sh 02-volume-diff-with-discards.sh 03-sig-while-metadata-locked.sh)
 VERSION = $(shell sed -ne '/^Version:/{s/Version: \(.*\)/\1/;p;q;}' thin_send_recv.spec)
 all-obj = thin_send_recv.o thin_delta_scanner.o
-CFLAGS = -o2 -Wall -DVERSION=\"$(VERSION)\" $(EXTRA_CFLAGS)
+CFLAGS  ?= -o2 -Wall
+CFLAGS  += -DVERSION=\"$(VERSION)\" $(EXTRA_CFLAGS)
 
 # globs are messy, would need dh_clean, better name the ones we need
 DEBFILES = rules copyright source/format changelog compat control

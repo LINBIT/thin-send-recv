@@ -26,14 +26,10 @@ by a snapshot or between two snapshots.
 %setup -q -n %{name}-%{version}
 
 %build
-make EXTRA_CFLAGS=-g
+%make_build
 
 %install
-rm -rf $RPM_BUILD_ROOT
 make install DESTDIR=$RPM_BUILD_ROOT
-
-%clean
-rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(-,root,root,-)

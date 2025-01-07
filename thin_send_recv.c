@@ -1101,7 +1101,7 @@ static int system_fmt(const char *fmt, ...)
 
 static int lockfile_lock(void)
 {
-	int lockfile_fd = open(LOCKFILE_PATH, O_CREAT | O_RDONLY);
+	int lockfile_fd = open(LOCKFILE_PATH, O_CREAT | O_RDONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 	if (lockfile_fd != -1) {
 		const int lock_rc = flock(lockfile_fd, LOCK_EX);
 		if (lock_rc != 0) {

@@ -1,5 +1,5 @@
 Name: thin-send-recv
-Version: 1.1.2
+Version: 1.1.3
 Release: 1
 Summary: send and receive for LVM thin volumes
 License: GPLv3+
@@ -37,6 +37,10 @@ make install DESTDIR=$RPM_BUILD_ROOT
 %{_bindir}/*
 
 %changelog
+* Wed Jan 08 2025 Moritz Wanzenböck <moritz.wanzenboeck@linbit.com> - 1.1.3-1
+- fix lock file creation not setting permission bits
+- fix RPM build instructions
+
 * Fri Jul 19 2024 Roland Kammerer <roland.kammerer@linbit.com> - 1.1.2-1
 - ci: test with ASAN and UBSAN enabled
 - parse thin_dump metadata in new format

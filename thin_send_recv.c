@@ -4,6 +4,7 @@
 #include <sys/sendfile.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
+#include <sys/sysmacros.h> /* major(), minor() */
 #include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -18,7 +19,7 @@
 #include <signal.h>
 #include <assert.h>
 
-#include <linux/fs.h> /* ioctl BLKDISCARD */
+#include <linux/fs.h> /* ioctl BLKDISCARD, BLKZEROOUT */
 
 #include "thin_delta_scanner.h"
 
@@ -76,6 +77,8 @@ struct stream_stats {
 struct stream_context {
 	int in_fd;
 	int out_fd;
+	uint64_t discard_granularity;
+	bool warned_no_discard;
 
 	uint64_t n_chunks;
 	uint64_t n_data;
@@ -101,10 +104,9 @@ static int lockfile_lock(void);
 static void lockfile_unlock(int lockfile_fd);
 static int reserve_metadata_snap(const char *thin_pool_dm_path);
 static void release_metadata_snap(const char *thin_pool_dm_path);
+static uint64_t get_discard_granularity(int fd);
 
 static const char *data_for_signal_handler;
-
-static bool unsupported_unmap_is_fatal = false;
 
 enum stream_format {
 	STREAM_FORMAT_AUTO,
@@ -393,6 +395,7 @@ static void thin_receive(const char *snap_name, int in_fd)
 
 	ctx.in_fd = in_fd;
 	ctx.out_fd = out_fd;
+	ctx.discard_granularity = get_discard_granularity(out_fd);
 	do {
 		cont = process_input(&ctx);
 	} while (cont);
@@ -831,47 +834,123 @@ size_t read_complete(struct stream_context *ctx, void *const buf, const size_t r
 	return completed_count;
 }
 
-static void cmd_unmap(int out_fd, off_t byte_offset, size_t byte_length)
+/* For huge devices, and if device-mapper passes this down to the backend,
+ * this may be large, and take some time.
+ * Do it in "chunks" per call so this can show progress
+ * and can be interrupted, if necessary. */
+static const uint64_t bytes_per_iteration = 1024*1024*1024;
+
+static void zero_out(int out_fd, uint64_t byte_offset, uint64_t byte_length)
 {
-	/* For huge devices, and if device-mapper passes this down to the backend,
-	 * this may be large, and take some time.
-	 * Do it in "chunks" per call so this can show progress
-	 * and can be interrupted, if necessary. */
-	const size_t bytes_per_iteration = 1024*1024*1024;
-
-	size_t bytes_left = byte_length;
-	off_t offset = byte_offset;
-	size_t chunk;
+	uint64_t bytes_left = byte_length;
+	uint64_t offset = byte_offset;
 	uint64_t range[2];
-	int ret;
-
-	/* TODO
-	 * maybe properly align start and end of ioctl ranges,
-	 * and explicitly pwrite zero-out unaligned leading/trailing partial "extents".
-	 * In case thin allocation chunk size does not match between sender and receiver.
-	 */
 
 	while (bytes_left > 0) {
-		chunk = bytes_per_iteration < bytes_left ? bytes_per_iteration : bytes_left;
 		range[0] = offset;
-		range[1] = chunk; /* len */
+		range[1] = bytes_per_iteration < bytes_left ? bytes_per_iteration : bytes_left;
 
-		ret = ioctl(out_fd, BLKDISCARD, &range);
-
-		if (ret == -1) {
-			bool ignore =
-				errno == EOPNOTSUPP &&
-				unsupported_unmap_is_fatal == false;
-
-			fprintf(stderr, "unmap(,%zd,%zu) failed: %s%s\n",
-				byte_offset, byte_length, strerror(errno),
-				ignore ? "" : " -- ignored\n");
-			if (!ignore)
-				exit(10);
+		if (ioctl(out_fd, BLKZEROOUT, &range) == -1) {
+			fprintf(stderr, "zeroout(,%"PRIu64",%"PRIu64") failed: %s\n",
+				byte_offset, byte_length, strerror(errno));
+			exit(10);
 		}
-		offset += chunk;
-		bytes_left -= chunk;
+		offset += range[1];
+		bytes_left -= range[1];
 	}
+}
+
+/* returns false if the device does not support discards */
+static bool discard(int out_fd, uint64_t byte_offset, uint64_t byte_length)
+{
+	uint64_t bytes_left = byte_length;
+	uint64_t offset = byte_offset;
+	uint64_t range[2];
+
+	while (bytes_left > 0) {
+		range[0] = offset;
+		range[1] = bytes_per_iteration < bytes_left ? bytes_per_iteration : bytes_left;
+
+		if (ioctl(out_fd, BLKDISCARD, &range) == -1) {
+			if (errno == EOPNOTSUPP)
+				return false;
+
+			fprintf(stderr, "unmap(,%"PRIu64",%"PRIu64") failed: %s\n",
+				byte_offset, byte_length, strerror(errno));
+			exit(10);
+		}
+		offset += range[1];
+		bytes_left -= range[1];
+	}
+	return true;
+}
+
+static void warn_no_discard(struct stream_context *ctx)
+{
+	if (ctx->warned_no_discard)
+		return;
+	fprintf(stderr, "Target does not support discards, writing zeroes instead.\n"
+		"Space freed on the source will remain allocated on the target.\n");
+	ctx->warned_no_discard = true;
+}
+
+/* The sender's thin pool may have a smaller chunk size than ours.
+ * dm-thin ignores discards of partial chunks, the old data would remain.
+ * Discard only the whole chunks, and write zeroes to the partial ones
+ * at the start and the end of the range. */
+static void cmd_unmap(struct stream_context *ctx, uint64_t byte_offset, uint64_t byte_length)
+{
+	uint64_t granularity = ctx->discard_granularity;
+	uint64_t end = byte_offset + byte_length;
+	int out_fd = ctx->out_fd;
+	uint64_t head, tail;
+
+	if (granularity == 0) {
+		warn_no_discard(ctx);
+		zero_out(out_fd, byte_offset, byte_length);
+		return;
+	}
+
+	head = (byte_offset + granularity - 1) / granularity * granularity;
+	tail = end / granularity * granularity;
+	if (head >= tail) {
+		zero_out(out_fd, byte_offset, byte_length);
+		return;
+	}
+
+	if (byte_offset < head)
+		zero_out(out_fd, byte_offset, head - byte_offset);
+	if (!discard(out_fd, head, tail - head)) {
+		warn_no_discard(ctx);
+		ctx->discard_granularity = 0;
+		zero_out(out_fd, head, tail - head);
+	}
+	if (tail < end)
+		zero_out(out_fd, tail, end - tail);
+}
+
+/* returns 0 if the device does not support discards, or if unknown */
+static uint64_t get_discard_granularity(int fd)
+{
+	unsigned long long granularity = 0;
+	struct stat sb;
+	char *path;
+	FILE *f;
+
+	if (fstat(fd, &sb) == -1 || !S_ISBLK(sb.st_mode))
+		return 0;
+
+	checked_asprintf(&path, "/sys/dev/block/%u:%u/queue/discard_granularity",
+			 major(sb.st_rdev), minor(sb.st_rdev));
+	f = fopen(path, "r");
+	free(path);
+	if (!f)
+		return 0;
+	if (fscanf(f, "%llu", &granularity) != 1)
+		granularity = 0;
+	fclose(f);
+
+	return granularity;
 }
 
 static void verify_end_stream(struct stream_context *ctx, uint64_t offset, uint64_t length)
@@ -1008,7 +1087,7 @@ static bool process_input(struct stream_context *ctx)
 			exit(10);
 		}
 		 */
-		cmd_unmap(out_fd, offset, length);
+		cmd_unmap(ctx, offset, length);
 		ctx->n_unmap++;
 		break;
 

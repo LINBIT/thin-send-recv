@@ -77,7 +77,9 @@ struct stream_stats {
 struct stream_context {
 	int in_fd;
 	int out_fd;
+	int check_fd;
 	uint64_t discard_granularity;
+	uint64_t dev_size;
 	bool warned_no_discard;
 
 	uint64_t n_chunks;
@@ -391,11 +393,16 @@ static void thin_receive(const char *snap_name, int in_fd)
 		perror("failed to open snap");
 		exit(10);
 	}
-	free(snap_file_name);
 
 	ctx.in_fd = in_fd;
 	ctx.out_fd = out_fd;
+	/* For clear_part_of_chunk(). Without it, thin_recv writes zeroes
+	 * instead of discarding a chunk, which is safe. */
+	ctx.check_fd = open(snap_file_name, O_RDONLY | O_DIRECT | O_CLOEXEC);
+	free(snap_file_name);
 	ctx.discard_granularity = get_discard_granularity(out_fd);
+	if (ioctl(out_fd, BLKGETSIZE64, &ctx.dev_size) == -1)
+		ctx.dev_size = 0;
 	do {
 		cont = process_input(&ctx);
 	} while (cont);
@@ -410,6 +417,8 @@ static void thin_receive(const char *snap_name, int in_fd)
 			exit(10);
 	}
 
+	if (ctx.check_fd != -1)
+		close(ctx.check_fd);
 	close(out_fd);
 }
 
@@ -894,39 +903,96 @@ static void warn_no_discard(struct stream_context *ctx)
 	ctx->warned_no_discard = true;
 }
 
-/* The sender's thin pool may have a smaller chunk size than ours.
- * dm-thin ignores discards of partial chunks, the old data would remain.
- * Discard only the whole chunks, and write zeroes to the partial ones
- * at the start and the end of the range. */
+static bool discard_or_disable(struct stream_context *ctx, uint64_t byte_offset, uint64_t byte_length)
+{
+	if (discard(ctx->out_fd, byte_offset, byte_length))
+		return true;
+
+	warn_no_discard(ctx);
+	ctx->discard_granularity = 0;
+	return false;
+}
+
+static bool is_zero(const char *buf, size_t len)
+{
+	return len == 0 || (buf[0] == 0 && !memcmp(buf, buf + 1, len - 1));
+}
+
+static bool range_is_zero(struct stream_context *ctx, uint64_t byte_offset, uint64_t byte_length)
+{
+	static char buf[128 * 1024] __attribute__((aligned(4096)));
+	uint64_t done = 0;
+
+	while (done < byte_length) {
+		size_t count = byte_length - done < sizeof(buf) ? byte_length - done : sizeof(buf);
+		ssize_t ret = pread(ctx->check_fd, buf, count, byte_offset + done);
+
+		if (ret == -1 && errno == EINTR)
+			continue;
+		if (ret <= 0) {
+			fprintf(stderr, "pread(,%zu,%"PRIu64") failed: %s\n",
+				count, byte_offset + done, ret ? strerror(errno) : "end of device");
+			exit(10);
+		}
+		if (!is_zero(buf, ret))
+			return false;
+		done += ret;
+	}
+	return true;
+}
+
+/* Discard the chunk if it is zero outside the range, else zero the range.
+ * O_DIRECT: BLKZEROOUT on kernel 3.10 (RHEL 7) leaves stale page cache. */
+static void clear_part_of_chunk(struct stream_context *ctx, uint64_t byte_offset, uint64_t byte_length)
+{
+	uint64_t granularity = ctx->discard_granularity;
+	uint64_t end = byte_offset + byte_length;
+	uint64_t chunk_start, chunk_end;
+
+	if (granularity == 0 || ctx->check_fd == -1 || (byte_offset | byte_length) % 4096)
+		goto zero_out;
+
+	chunk_start = byte_offset / granularity * granularity;
+	chunk_end = chunk_start + granularity;
+	if (chunk_end > ctx->dev_size ||
+	    !range_is_zero(ctx, chunk_start, byte_offset - chunk_start) ||
+	    !range_is_zero(ctx, end, chunk_end - end) ||
+	    !discard_or_disable(ctx, chunk_start, granularity))
+		goto zero_out;
+	return;
+
+zero_out:
+	zero_out(ctx->out_fd, byte_offset, byte_length);
+}
+
+/* The sender's chunks may be smaller than ours, and dm-thin ignores a discard
+ * of part of a chunk. Discard the chunks the range covers fully. */
 static void cmd_unmap(struct stream_context *ctx, uint64_t byte_offset, uint64_t byte_length)
 {
 	uint64_t granularity = ctx->discard_granularity;
 	uint64_t end = byte_offset + byte_length;
-	int out_fd = ctx->out_fd;
 	uint64_t head, tail;
 
 	if (granularity == 0) {
 		warn_no_discard(ctx);
-		zero_out(out_fd, byte_offset, byte_length);
+		zero_out(ctx->out_fd, byte_offset, byte_length);
 		return;
 	}
 
 	head = (byte_offset + granularity - 1) / granularity * granularity;
 	tail = end / granularity * granularity;
-	if (head >= tail) {
-		zero_out(out_fd, byte_offset, byte_length);
+	if (head > tail) {
+		/* within one chunk, touching neither of its boundaries */
+		clear_part_of_chunk(ctx, byte_offset, byte_length);
 		return;
 	}
 
 	if (byte_offset < head)
-		zero_out(out_fd, byte_offset, head - byte_offset);
-	if (!discard(out_fd, head, tail - head)) {
-		warn_no_discard(ctx);
-		ctx->discard_granularity = 0;
-		zero_out(out_fd, head, tail - head);
-	}
+		clear_part_of_chunk(ctx, byte_offset, head - byte_offset);
+	if (head < tail && !discard_or_disable(ctx, head, tail - head))
+		zero_out(ctx->out_fd, head, tail - head);
 	if (tail < end)
-		zero_out(out_fd, tail, end - tail);
+		clear_part_of_chunk(ctx, tail, end - tail);
 }
 
 /* returns 0 if the device does not support discards, or if unknown */
